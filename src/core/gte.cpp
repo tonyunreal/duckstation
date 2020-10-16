@@ -3,6 +3,7 @@
 #include "common/bitutils.h"
 #include "common/state_wrapper.h"
 #include "cpu_core.h"
+#include "gpu.h"
 #include "pgxp.h"
 #include "settings.h"
 #include <algorithm>
@@ -219,6 +220,9 @@ void WriteRegister(u32 index, u32 value)
     case 61: // ZSF3
     case 62: // ZSF4
     {
+      if (index == 58 && REGS.r32[index] != SignExtend32(Truncate16(value)))
+        g_gpu->UpdateDepthBufferFromMaskBit();
+
       // sign-extend z component of vector registers
       REGS.r32[index] = SignExtend32(Truncate16(value));
     }
@@ -701,6 +705,7 @@ static void RTPS(const s16 V[3], u8 shift, bool lm, bool last)
     }
 
     // this can potentially use increased precision on Z
+    const float fsz = float(REGS.ZSF3) / 32767.0f;
     const float precise_z = std::max<float>(float(REGS.H) / 2.0f, precise_sz3);
     const float precise_h_div_sz = float(REGS.H) / precise_z;
     const float fofx = float(REGS.OFX) / float(1 << 16);
@@ -831,6 +836,7 @@ static void Execute_AVSZ3(Instruction inst)
   const s64 result = s64(REGS.ZSF3) * s32(u32(REGS.SZ1) + u32(REGS.SZ2) + u32(REGS.SZ3));
   TruncateAndSetMAC<0>(result, 0);
   SetOTZ(s32(result >> 12));
+  PGXP::GTE_AVSZ3(REGS.SZ1, REGS.SZ2, REGS.SZ3, REGS.ZSF3);
 
   REGS.FLAG.UpdateError();
 }
@@ -842,6 +848,7 @@ static void Execute_AVSZ4(Instruction inst)
   const s64 result = s64(REGS.ZSF4) * s32(u32(REGS.SZ0) + u32(REGS.SZ1) + u32(REGS.SZ2) + u32(REGS.SZ3));
   TruncateAndSetMAC<0>(result, 0);
   SetOTZ(s32(result >> 12));
+  PGXP::GTE_AVSZ4(REGS.SZ1, REGS.SZ2, REGS.SZ3, REGS.ZSF4);
 
   REGS.FLAG.UpdateError();
 }

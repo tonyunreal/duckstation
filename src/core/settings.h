@@ -110,6 +110,7 @@ struct Settings
   bool gpu_pgxp_vertex_cache = false;
   bool gpu_pgxp_cpu = false;
   bool gpu_pgxp_preserve_proj_fp = false;
+  bool gpu_pgxp_depth_buffer = false;
   DisplayCropMode display_crop_mode = DisplayCropMode::None;
   DisplayAspectRatio display_aspect_ratio = DisplayAspectRatio::Auto;
   s16 display_active_start_offset = 0;

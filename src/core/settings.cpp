@@ -160,6 +160,7 @@ void Settings::Load(SettingsInterface& si)
   gpu_pgxp_cpu = si.GetBoolValue("GPU", "PGXPCPU", false);
   gpu_pgxp_preserve_proj_fp = si.GetBoolValue("GPU", "PGXPPreserveProjFP", false);
   gpu_pgxp_tolerance = si.GetFloatValue("GPU", "PGXPTolerance", -1.0f);
+  gpu_pgxp_depth_buffer = si.GetBoolValue("GPU", "PGXPDepthBuffer", false);
 
   display_crop_mode =
     ParseDisplayCropMode(
@@ -298,6 +299,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("GPU", "PGXPCPU", gpu_pgxp_cpu);
   si.SetBoolValue("GPU", "PGXPPreserveProjFP", gpu_pgxp_preserve_proj_fp);
   si.SetFloatValue("GPU", "PGXPTolerance", gpu_pgxp_tolerance);
+  si.SetBoolValue("GPU", "PGXPDepthBuffer", gpu_pgxp_depth_buffer);
 
   si.SetStringValue("Display", "CropMode", GetDisplayCropModeName(display_crop_mode));
   si.SetIntValue("Display", "ActiveStartOffset", display_active_start_offset);
