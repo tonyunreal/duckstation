@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "aboutdialog.h"
 #include "autoupdaterdialog.h"
+#include "cheatmanagerdialog.h"
 #include "common/assert.h"
 #include "core/host_display.h"
 #include "core/settings.h"
@@ -779,6 +780,7 @@ void MainWindow::connectSignals()
   connect(m_ui.actionAbout, &QAction::triggered, this, &MainWindow::onAboutActionTriggered);
   connect(m_ui.actionCheckForUpdates, &QAction::triggered, this, &MainWindow::onCheckForUpdatesActionTriggered);
   connect(m_ui.actionMemory_Card_Editor, &QAction::triggered, this, &MainWindow::onToolsMemoryCardEditorTriggered);
+  connect(m_ui.actionCheatManager, &QAction::triggered, this, &MainWindow::onToolsCheatManagerTriggered);
   connect(m_ui.actionOpenDataDirectory, &QAction::triggered, this, &MainWindow::onToolsOpenDataDirectoryTriggered);
   connect(m_ui.actionGridViewShowTitles, &QAction::triggered, m_game_list_widget, &GameListWidget::setShowCoverTitles);
   connect(m_ui.actionGridViewZoomIn, &QAction::triggered, m_game_list_widget, [this]() {
@@ -1165,6 +1167,15 @@ void MainWindow::onToolsMemoryCardEditorTriggered()
 
   m_memory_card_editor_dialog->setModal(false);
   m_memory_card_editor_dialog->show();
+}
+
+void MainWindow::onToolsCheatManagerTriggered()
+{
+  if (!m_cheat_manager_dialog)
+    m_cheat_manager_dialog = new CheatManagerDialog(this);
+
+  m_cheat_manager_dialog->setModal(false);
+  m_cheat_manager_dialog->show();
 }
 
 void MainWindow::onToolsOpenDataDirectoryTriggered()

@@ -18,6 +18,9 @@ set(SRCS
   biossettingswidget.cpp
   biossettingswidget.h
   biossettingswidget.ui
+  cheatmanagerdialog.cpp
+  cheatmanagerdialog.h
+  cheatmanagerdialog.ui
   consolesettingswidget.cpp
   consolesettingswidget.h
   consolesettingswidget.ui
