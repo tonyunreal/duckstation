@@ -31,6 +31,15 @@ public:
     OpenGLES
   };
 
+  enum class DisplayPixelFormat : u32
+  {
+    RGBA8,
+    BGRA8,
+    RGB565,
+    RGBA5551,
+    Count
+  };
+
   enum class Alignment
   {
     LeftOrTop,
@@ -115,6 +124,15 @@ public:
     m_display_changed = true;
   }
 
+  void SetDisplayTextureRect(s32 view_x, s32 view_y, s32 view_width, s32 view_height)
+  {
+    m_display_texture_view_x = view_x;
+    m_display_texture_view_y = view_y;
+    m_display_texture_view_width = view_width;
+    m_display_texture_view_height = view_height;
+    m_display_changed = true;
+  }
+
   void SetDisplayParameters(s32 display_width, s32 display_height, s32 active_left, s32 active_top, s32 active_width,
                             s32 active_height, float display_aspect_ratio)
   {
@@ -127,6 +145,13 @@ public:
     m_display_aspect_ratio = display_aspect_ratio;
     m_display_changed = true;
   }
+
+  static u32 GetDisplayPixelFormatSize(DisplayPixelFormat format);
+
+  virtual bool BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                                     u32* out_pitch) = 0;
+  virtual void EndSetDisplayPixels() = 0;
+  virtual bool SetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, const void* buffer, u32 pitch);
 
   void SetDisplayLinearFiltering(bool enabled) { m_display_linear_filtering = enabled; }
   void SetDisplayTopMargin(s32 height) { m_display_top_margin = height; }

@@ -232,6 +232,46 @@ bool VulkanHostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y
   return true;
 }
 
+bool VulkanHostDisplay::BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                                              u32* out_pitch)
+{
+  static constexpr std::array<VkFormat, static_cast<u32>(DisplayPixelFormat::Count)> pf_mapping = {
+    {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B5G6R5_UNORM_PACK16,
+     VK_FORMAT_A1R5G5B5_UNORM_PACK16}};
+  const VkFormat vk_format = pf_mapping[static_cast<u32>(format)];
+
+  if (m_display_pixels_texture.GetWidth() < width || m_display_pixels_texture.GetHeight() < height ||
+      m_display_pixels_texture.GetFormat() != vk_format)
+  {
+    if (!m_display_pixels_texture.Create(width, height, 1, 1, vk_format, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_VIEW_TYPE_2D,
+                                         VK_IMAGE_TILING_OPTIMAL,
+                                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT))
+    {
+      return false;
+    }
+  }
+
+  if ((m_upload_staging_texture.GetWidth() < width || m_upload_staging_texture.GetHeight() < height) &&
+      !m_upload_staging_texture.Create(Vulkan::StagingBuffer::Type::Upload, vk_format, width, height))
+  {
+    return false;
+  }
+
+  SetDisplayTexture(&m_display_pixels_texture, m_display_pixels_texture.GetWidth(),
+                    m_display_pixels_texture.GetHeight(), 0, 0, width, height);
+
+  *out_buffer = m_upload_staging_texture.GetMappedPointer();
+  *out_pitch = m_upload_staging_texture.GetMappedStride();
+  return true;
+}
+
+void VulkanHostDisplay::EndSetDisplayPixels()
+{
+  m_upload_staging_texture.CopyToTexture(0, 0, m_display_pixels_texture, 0, 0, 0, 0,
+                                         static_cast<u32>(m_display_texture_view_width),
+                                         static_cast<u32>(m_display_texture_view_height));
+}
+
 void VulkanHostDisplay::SetVSync(bool enabled)
 {
   // This swap chain should not be used by the current buffer, thus safe to destroy.
@@ -443,6 +483,7 @@ void VulkanHostDisplay::DestroyResources()
   m_post_processing_chain.ClearStages();
 #endif
 
+  m_display_pixels_texture.Destroy(false);
   m_readback_staging_texture.Destroy(false);
   m_upload_staging_texture.Destroy(false);
 

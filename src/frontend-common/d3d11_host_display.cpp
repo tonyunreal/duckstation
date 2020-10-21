@@ -171,6 +171,45 @@ bool D3D11HostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y,
                                                     static_cast<u32*>(out_data));
 }
 
+bool D3D11HostDisplay::BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                                             u32* out_pitch)
+{
+  ClearDisplayTexture();
+
+  static constexpr std::array<DXGI_FORMAT, static_cast<u32>(DisplayPixelFormat::Count)> pf_mapping = {
+    {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B5G6R5_UNORM, DXGI_FORMAT_B5G5R5A1_UNORM}};
+  const DXGI_FORMAT dxgi_format = pf_mapping[static_cast<u32>(format)];
+  if (m_display_pixels_texture.GetWidth() < width || m_display_pixels_texture.GetHeight() < height ||
+      m_display_pixels_texture.GetFormat() != dxgi_format)
+  {
+    if (!m_display_pixels_texture.Create(m_device.Get(), width, height, dxgi_format, D3D11_BIND_SHADER_RESOURCE,
+                                         nullptr, 0, true))
+    {
+      return false;
+    }
+  }
+
+  D3D11_MAPPED_SUBRESOURCE sr;
+  HRESULT hr = m_context->Map(m_display_pixels_texture.GetD3DTexture(), 0, D3D11_MAP_WRITE_DISCARD, 0, &sr);
+  if (FAILED(hr))
+  {
+    Log_ErrorPrintf("Map pixels texture failed: %08X", hr);
+    return false;
+  }
+
+  *out_buffer = sr.pData;
+  *out_pitch = sr.RowPitch;
+
+  SetDisplayTexture(m_display_pixels_texture.GetD3DSRV(), m_display_pixels_texture.GetWidth(),
+                    m_display_pixels_texture.GetHeight(), 0, 0, static_cast<u32>(width), static_cast<u32>(height));
+  return true;
+}
+
+void D3D11HostDisplay::EndSetDisplayPixels()
+{
+  m_context->Unmap(m_display_pixels_texture.GetD3DTexture(), 0);
+}
+
 void D3D11HostDisplay::SetVSync(bool enabled)
 {
 #ifndef LIBRETRO

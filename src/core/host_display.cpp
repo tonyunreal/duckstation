@@ -1,4 +1,5 @@
 #include "host_display.h"
+#include "common/assert.h"
 #include "common/file_system.h"
 #include "common/log.h"
 #include "common/string_util.h"
@@ -13,6 +14,52 @@ Log_SetChannel(HostDisplay);
 HostDisplayTexture::~HostDisplayTexture() = default;
 
 HostDisplay::~HostDisplay() = default;
+
+u32 HostDisplay::GetDisplayPixelFormatSize(DisplayPixelFormat format)
+{
+  switch (format)
+  {
+    case DisplayPixelFormat::RGBA8:
+    case DisplayPixelFormat::BGRA8:
+      return 4;
+
+    case DisplayPixelFormat::RGBA5551:
+      return 2;
+
+    default:
+      return 0;
+  }
+}
+
+bool HostDisplay::SetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, const void* buffer, u32 pitch)
+{
+  void* map_ptr;
+  u32 map_pitch;
+  if (!BeginSetDisplayPixels(format, width, height, &map_ptr, &map_pitch))
+    return false;
+
+  if (pitch == map_pitch)
+  {
+    std::memcpy(map_ptr, buffer, height * map_pitch);
+  }
+  else
+  {
+    const u32 copy_size = width * GetDisplayPixelFormatSize(format);
+    DebugAssert(pitch >= copy_size && map_pitch >= copy_size);
+
+    const u8* src_ptr = static_cast<const u8*>(buffer);
+    u8* dst_ptr = static_cast<u8*>(map_ptr);
+    for (u32 i = 0; i < height; i++)
+    {
+      std::memcpy(dst_ptr, src_ptr, copy_size);
+      src_ptr += pitch;
+      dst_ptr += map_pitch;
+    }
+  }
+
+  EndSetDisplayPixels();
+  return true;
+}
 
 void HostDisplay::SetSoftwareCursor(std::unique_ptr<HostDisplayTexture> texture, float scale /*= 1.0f*/)
 {
