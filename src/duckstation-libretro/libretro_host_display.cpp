@@ -164,20 +164,36 @@ bool LibretroHostDisplay::SetPostProcessingChain(const std::string_view& config)
 std::unique_ptr<HostDisplayTexture> LibretroHostDisplay::CreateTexture(u32 width, u32 height, const void* data,
                                                                        u32 data_stride, bool dynamic)
 {
-  return LibretroDisplayTexture::Create(width, height, data, data_stride);
+  return nullptr;
 }
 
 void LibretroHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
                                         const void* data, u32 data_stride)
 {
-  static_cast<LibretroDisplayTexture*>(texture)->Write(x, y, width, height, data, data_stride);
 }
 
 bool LibretroHostDisplay::DownloadTexture(const void* texture_handle, u32 x, u32 y, u32 width, u32 height,
                                           void* out_data, u32 out_data_stride)
 {
-  static_cast<const LibretroDisplayTexture*>(texture_handle)->Read(x, y, width, height, out_data, out_data_stride);
-  return true;
+  return false;
+}
+
+bool LibretroHostDisplay::BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                                                u32* out_pitch)
+{
+  g_retro_environment_callback(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT)
+  throw std::logic_error("The method or operation is not implemented.");
+}
+
+void LibretroHostDisplay::EndSetDisplayPixels()
+{
+  throw std::logic_error("The method or operation is not implemented.");
+}
+
+bool LibretroHostDisplay::SetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, const void* buffer,
+                                           u32 pitch)
+{
+  throw std::logic_error("The method or operation is not implemented.");
 }
 
 void LibretroHostDisplay::SetVSync(bool enabled)

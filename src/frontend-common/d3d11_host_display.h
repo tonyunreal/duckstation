@@ -54,6 +54,9 @@ public:
                      u32 texture_data_stride) override;
   bool DownloadTexture(const void* texture_handle, u32 x, u32 y, u32 width, u32 height, void* out_data,
                        u32 out_data_stride) override;
+  bool BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                             u32* out_pitch) override;
+  void EndSetDisplayPixels() override;
 
   virtual void SetVSync(bool enabled) override;
 

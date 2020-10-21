@@ -28,9 +28,11 @@ D3D11_TEXTURE2D_DESC Texture::GetDesc() const
 }
 
 bool Texture::Create(ID3D11Device* device, u32 width, u32 height, DXGI_FORMAT format, u32 bind_flags,
-                     const void* initial_data, u32 initial_data_stride)
+                     const void* initial_data, u32 initial_data_stride, bool dynamic)
 {
-  CD3D11_TEXTURE2D_DESC desc(format, width, height, 1, 1, bind_flags, D3D11_USAGE_DEFAULT, 0, 1, 0, 0);
+  CD3D11_TEXTURE2D_DESC desc(format, width, height, 1, 1, bind_flags,
+                             dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT, dynamic ? D3D11_CPU_ACCESS_WRITE : 0,
+                             1, 0, 0);
 
   D3D11_SUBRESOURCE_DATA srd;
   srd.pSysMem = initial_data;

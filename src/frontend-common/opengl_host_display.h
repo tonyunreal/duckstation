@@ -54,6 +54,10 @@ public:
                      u32 texture_data_stride) override;
   bool DownloadTexture(const void* texture_handle, u32 x, u32 y, u32 width, u32 height, void* out_data,
                        u32 out_data_stride) override;
+  bool BeginSetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, void** out_buffer,
+                             u32* out_pitch) override;
+  void EndSetDisplayPixels() override;
+  bool SetDisplayPixels(DisplayPixelFormat format, u32 width, u32 height, const void* buffer, u32 pitch) override;
 
   virtual void SetVSync(bool enabled) override;
 
@@ -100,6 +104,12 @@ protected:
   GLuint m_display_nearest_sampler = 0;
   GLuint m_display_linear_sampler = 0;
   GLuint m_uniform_buffer_alignment = 1;
+
+  GLuint m_display_pixels_texture_id = 0;
+  std::unique_ptr<GL::StreamBuffer> m_display_pixels_texture_pbo;
+  DisplayPixelFormat m_display_pixels_texture_format = HostDisplay::DisplayPixelFormat::RGBA8;
+  u32 m_display_pixels_texture_pbo_map_offset = 0;
+  u32 m_display_pixels_texture_pbo_map_size = 0;
 
 #ifndef LIBRETRO
   PostProcessingChain m_post_processing_chain;
