@@ -391,10 +391,10 @@ bool GPU_HW_OpenGL::CompilePrograms()
       {
         for (u8 interlacing = 0; interlacing < 2; interlacing++)
         {
-          const bool textured = (static_cast<TextureMode>(texture_mode) != TextureMode::Disabled);
+          const bool textured = (static_cast<GPUTextureMode>(texture_mode) != GPUTextureMode::Disabled);
           const std::string batch_vs = shadergen.GenerateBatchVertexShader(textured);
           const std::string fs = shadergen.GenerateBatchFragmentShader(
-            static_cast<BatchRenderMode>(render_mode), static_cast<TextureMode>(texture_mode),
+            static_cast<BatchRenderMode>(render_mode), static_cast<GPUTextureMode>(texture_mode),
             ConvertToBoolUnchecked(dithering), ConvertToBoolUnchecked(interlacing));
 
           const auto link_callback = [this, textured, use_binding_layout](GL::Program& prog) {
@@ -566,10 +566,10 @@ void GPU_HW_OpenGL::DrawBatchVertices(BatchRenderMode render_mode, u32 base_vert
                                              [BoolToUInt8(m_batch.dithering)][BoolToUInt8(m_batch.interlacing)];
   prog.Bind();
 
-  if (m_batch.texture_mode != TextureMode::Disabled)
+  if (m_batch.texture_mode != GPUTextureMode::Disabled)
     m_vram_read_texture.Bind();
 
-  if (m_batch.transparency_mode == TransparencyMode::Disabled || render_mode == BatchRenderMode::OnlyOpaque)
+  if (m_batch.transparency_mode == GPUTransparencyMode::Disabled || render_mode == BatchRenderMode::OnlyOpaque)
   {
     glDisable(GL_BLEND);
   }
@@ -577,7 +577,7 @@ void GPU_HW_OpenGL::DrawBatchVertices(BatchRenderMode render_mode, u32 base_vert
   {
     glEnable(GL_BLEND);
     glBlendEquationSeparate(
-      m_batch.transparency_mode == TransparencyMode::BackgroundMinusForeground ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD,
+      m_batch.transparency_mode == GPUTransparencyMode::BackgroundMinusForeground ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD,
       GL_FUNC_ADD);
     glBlendFuncSeparate(GL_ONE, m_supports_dual_source_blend ? GL_SRC1_ALPHA : GL_SRC_ALPHA, GL_ONE, GL_ZERO);
   }
