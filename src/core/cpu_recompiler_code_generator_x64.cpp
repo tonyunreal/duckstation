@@ -1760,6 +1760,7 @@ void CodeGenerator::EmitAddCPUStructField(u32 offset, const Value& value)
 
 void CodeGenerator::EmitLoadGuestRAMFastmem(const Value& address, RegSize size, Value& result)
 {
+#if 0
   // can't store displacements > 0x80000000 in-line
   const Value* actual_address = &address;
   if (address.IsConstant() && address.constant_value >= 0x80000000)
@@ -1816,6 +1817,29 @@ void CodeGenerator::EmitLoadGuestRAMFastmem(const Value& address, RegSize size, 
     }
     break;
   }
+#else
+  // TODO: We could mask the LSBs here for unaligned protection.
+  EmitCopyValue(RARG1, address);
+  m_emit->mov(GetHostReg32(RARG2), GetHostReg32(RARG1));
+  m_emit->shr(GetHostReg32(RARG1), 12);
+  m_emit->and_(GetHostReg32(RARG2), Bus::FASTMEM_PAGE_OFFSET_MASK);
+  m_emit->mov(GetHostReg64(RARG1), m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8]);
+
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->mov(GetHostReg8(result.host_reg), m_emit->byte[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+
+    case RegSize_16:
+      m_emit->mov(GetHostReg16(result.host_reg), m_emit->word[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+
+    case RegSize_32:
+      m_emit->mov(GetHostReg32(result.host_reg), m_emit->dword[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+  }
+#endif
 }
 
 void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
@@ -1828,6 +1852,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
   bpi.value_host_reg = result.host_reg;
   bpi.guest_pc = m_current_instruction->pc;
 
+#if 0
   // can't store displacements > 0x80000000 in-line
   const Value* actual_address = &address;
   if (address.IsConstant() && address.constant_value >= 0x80000000)
@@ -1886,6 +1911,32 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
     }
     break;
   }
+#else
+  m_register_cache.InhibitAllocation();
+
+  // TODO: We could mask the LSBs here for unaligned protection.
+  EmitCopyValue(RARG1, address);
+  m_emit->mov(GetHostReg32(RARG2), GetHostReg32(RARG1));
+  m_emit->shr(GetHostReg32(RARG1), 12);
+  m_emit->and_(GetHostReg32(RARG2), Bus::FASTMEM_PAGE_OFFSET_MASK);
+  m_emit->mov(GetHostReg64(RARG1), m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8]);
+  bpi.host_pc = GetCurrentNearCodePointer();
+
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->mov(GetHostReg8(result.host_reg), m_emit->byte[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+
+    case RegSize_16:
+      m_emit->mov(GetHostReg16(result.host_reg), m_emit->word[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+
+    case RegSize_32:
+      m_emit->mov(GetHostReg32(result.host_reg), m_emit->dword[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
+      break;
+  }
+#endif
 
   // TODO: BIOS reads...
   EmitAddCPUStructField(offsetof(CPU::State, pending_ticks), Value::FromConstantU32(Bus::RAM_READ_TICKS));
@@ -1997,6 +2048,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
   bpi.value_host_reg = value.host_reg;
   bpi.guest_pc = m_current_instruction->pc;
 
+#if 0
   // can't store displacements > 0x80000000 in-line
   const Value* actual_address = &address;
   Value temp_address;
@@ -2102,6 +2154,48 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
     }
     break;
   }
+#else
+  m_register_cache.InhibitAllocation();
+
+  // TODO: We could mask the LSBs here for unaligned protection.
+  EmitCopyValue(RARG1, address);
+  m_emit->mov(GetHostReg32(RARG2), GetHostReg32(RARG1));
+  m_emit->shr(GetHostReg32(RARG1), 12);
+  m_emit->and_(GetHostReg32(RARG2), Bus::FASTMEM_PAGE_OFFSET_MASK);
+  m_emit->mov(GetHostReg64(RARG1),
+              m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8 + (Bus::FASTMEM_NUM_PAGES * 8)]);
+  bpi.host_pc = GetCurrentNearCodePointer();
+
+  switch (value.size)
+  {
+    case RegSize_8:
+    {
+      if (value.IsConstant())
+        m_emit->mov(m_emit->byte[GetHostReg64(RARG1) + GetHostReg64(RARG2)], value.constant_value);
+      else
+        m_emit->mov(m_emit->byte[GetHostReg64(RARG1) + GetHostReg64(RARG2)], GetHostReg8(value));
+    }
+    break;
+
+    case RegSize_16:
+    {
+      if (value.IsConstant())
+        m_emit->mov(m_emit->word[GetHostReg64(RARG1) + GetHostReg64(RARG2)], value.constant_value);
+      else
+        m_emit->mov(m_emit->word[GetHostReg64(RARG1) + GetHostReg64(RARG2)], GetHostReg16(value));
+    }
+    break;
+
+    case RegSize_32:
+    {
+      if (value.IsConstant())
+        m_emit->mov(m_emit->dword[GetHostReg64(RARG1) + GetHostReg64(RARG2)], value.constant_value);
+      else
+        m_emit->mov(m_emit->dword[GetHostReg64(RARG1) + GetHostReg64(RARG2)], GetHostReg32(value));
+    }
+    break;
+  }
+#endif
 
   // insert nops, we need at least 5 bytes for a relative jump
   const u32 fastmem_size =

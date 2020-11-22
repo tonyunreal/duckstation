@@ -84,8 +84,13 @@ enum : size_t
 
 #ifdef WITH_FASTMEM
   // Fastmem region size is 4GB to cover the entire 32-bit address space.
-  FASTMEM_REGION_SIZE = UINT64_C(0x100000000)
+  FASTMEM_REGION_SIZE = UINT64_C(0x100000000),
 #endif
+
+  FASTMEM_NUM_PAGES = 0x100000, // 0x100000000 >> 12
+  FASTMEM_PAGE_SIZE = 0x1000,
+  FASTMEM_PAGE_OFFSET_MASK = FASTMEM_PAGE_SIZE - 1,
+  FASTMEM_PAGE_LOOKUP_COUNT = FASTMEM_NUM_PAGES * 2,
 };
 
 bool Initialize();

@@ -759,6 +759,7 @@ void ShutdownFastmem()
 
 Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, void* fault_address, bool is_write)
 {
+#if 0
   if (static_cast<u8*>(fault_address) < g_state.fastmem_base ||
       (static_cast<u8*>(fault_address) - g_state.fastmem_base) >= Bus::FASTMEM_REGION_SIZE)
   {
@@ -821,6 +822,39 @@ Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, voi
       }
     }
   }
+#else
+  // use upper_bound to find the next block after the pc
+  HostCodeMap::iterator upper_iter =
+    s_host_code_map.upper_bound(reinterpret_cast<CodeBlock::HostCodePointer>(exception_pc));
+  if (upper_iter == s_host_code_map.begin())
+    return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+
+  // then decrement it by one to (hopefully) get the block we want
+  upper_iter--;
+
+  // find the loadstore info in the code block
+  CodeBlock* block = upper_iter->second;
+  for (auto bpi_iter = block->loadstore_backpatch_info.begin(); bpi_iter != block->loadstore_backpatch_info.end();
+    ++bpi_iter)
+  {
+    Recompiler::LoadStoreBackpatchInfo& lbi = *bpi_iter;
+    if (lbi.host_pc == exception_pc)
+    {
+      // found it, do fixup
+      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi))
+      {
+        // remove the backpatch entry since we won't be coming back to this one
+        block->loadstore_backpatch_info.erase(bpi_iter);
+        return Common::PageFaultHandler::HandlerResult::ContinueExecution;
+      }
+      else
+      {
+        Log_ErrorPrintf("Failed to backpatch %p in block 0x%08X", exception_pc, block->GetPC());
+        return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+      }
+    }
+  }
+#endif
 
   // we didn't find the pc in our list..
   Log_ErrorPrintf("Loadstore PC not found for %p in block 0x%08X", exception_pc, block->GetPC());

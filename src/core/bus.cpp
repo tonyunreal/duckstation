@@ -3,6 +3,7 @@
 #include "common/align.h"
 #include "common/assert.h"
 #include "common/log.h"
+#include "common/make_array.h"
 #include "common/state_wrapper.h"
 #include "cpu_code_cache.h"
 #include "cpu_core.h"
@@ -90,7 +91,11 @@ static Common::MemoryArena m_memory_arena;
 
 #ifdef WITH_FASTMEM
 static u8* m_fastmem_base = nullptr;
+static u8** m_fastmem_page_lookup = nullptr;
 static std::vector<Common::MemoryArena::View> m_fastmem_ram_views;
+static constexpr auto m_fastmem_ram_mirrors =
+  make_array(0x00000000u, 0x00200000u, 0x00400000u, 0x00600000u, 0x80000000u, 0x80200000u, 0x80400000u, 0x80600000u,
+             0xA0000000u, 0xA0200000u, 0xA0400000u, 0xA0600000u);
 #endif
 
 static std::tuple<TickCount, TickCount, TickCount> CalculateMemoryTiming(MEMDELAY mem_delay, COMDELAY common_delay);
@@ -136,13 +141,16 @@ void Shutdown()
   UnmapFastmemViews();
 #endif
 
+  std::free(m_fastmem_page_lookup);
+  m_fastmem_page_lookup = nullptr;
+
+  CPU::g_state.fastmem_base = nullptr;
+
   if (g_ram)
   {
     m_memory_arena.ReleaseViewPtr(g_ram, RAM_SIZE);
     g_ram = nullptr;
   }
-
-  CPU::g_state.fastmem_base = nullptr;
 }
 
 void Reset()
@@ -270,6 +278,17 @@ bool AllocateMemory()
 
 #ifdef WITH_FASTMEM
 
+static u32 AddressToSoftPageIndex(u32 address)
+{
+  return address >> 12;
+}
+
+static ALWAYS_INLINE void SetSoftPageLookup(u32 address, u8* ptr, bool writable)
+{
+  m_fastmem_page_lookup[AddressToSoftPageIndex(address)] = ptr;
+  m_fastmem_page_lookup[FASTMEM_NUM_PAGES + AddressToSoftPageIndex(address)] = writable ? ptr : nullptr;
+}
+
 void UnmapFastmemViews()
 {
   m_fastmem_ram_views.clear();
@@ -281,69 +300,123 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
   if (!enabled)
   {
     m_fastmem_base = nullptr;
+    std::free(m_fastmem_page_lookup);
+    m_fastmem_page_lookup = nullptr;
     return;
   }
 
   Log_DevPrintf("Remapping fastmem area, isolate cache = %s", isolate_cache ? "true " : "false");
-  if (!m_fastmem_base)
+
+  if (false)
   {
-    m_fastmem_base = static_cast<u8*>(m_memory_arena.FindBaseAddressForMapping(FASTMEM_REGION_SIZE));
+    std::free(m_fastmem_page_lookup);
+    m_fastmem_page_lookup = nullptr;
+
     if (!m_fastmem_base)
     {
-      Log_ErrorPrint("Failed to find base address for fastmem");
-      return;
-    }
-
-    Log_InfoPrintf("Fastmem base: %p", m_fastmem_base);
-    CPU::g_state.fastmem_base = m_fastmem_base;
-  }
-
-  auto MapRAM = [](u32 base_address, bool writable) {
-    u8* map_address = m_fastmem_base + base_address;
-    auto view = m_memory_arena.CreateView(MEMORY_ARENA_RAM_OFFSET, RAM_SIZE, writable, false, map_address);
-    if (!view)
-    {
-      Log_ErrorPrintf("Failed to map RAM at fastmem area %p (offset 0x%08X)", map_address, RAM_SIZE);
-      return;
-    }
-
-    // mark all pages with code as non-writable
-    for (u32 i = 0; i < CPU_CODE_CACHE_PAGE_COUNT; i++)
-    {
-      if (m_ram_code_bits[i])
+      m_fastmem_base = static_cast<u8*>(m_memory_arena.FindBaseAddressForMapping(FASTMEM_REGION_SIZE));
+      if (!m_fastmem_base)
       {
-        u8* page_address = map_address + (i * CPU_CODE_CACHE_PAGE_SIZE);
-        if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, false, false))
+        Log_ErrorPrint("Failed to find base address for fastmem");
+        return;
+      }
+
+      Log_InfoPrintf("Fastmem base: %p", m_fastmem_base);
+      CPU::g_state.fastmem_base = m_fastmem_base;
+    }
+
+    auto MapRAM = [](u32 base_address, bool writable) {
+      u8* map_address = m_fastmem_base + base_address;
+      auto view = m_memory_arena.CreateView(MEMORY_ARENA_RAM_OFFSET, RAM_SIZE, writable, false, map_address);
+      if (!view)
+      {
+        Log_ErrorPrintf("Failed to map RAM at fastmem area %p (offset 0x%08X)", map_address, RAM_SIZE);
+        return;
+      }
+
+      // mark all pages with code as non-writable
+      for (u32 i = 0; i < CPU_CODE_CACHE_PAGE_COUNT; i++)
+      {
+        if (m_ram_code_bits[i])
         {
-          Log_ErrorPrintf("Failed to write-protect code page at %p");
-          return;
+          u8* page_address = map_address + (i * CPU_CODE_CACHE_PAGE_SIZE);
+          if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, false, false))
+          {
+            Log_ErrorPrintf("Failed to write-protect code page at %p");
+            return;
+          }
         }
       }
+
+      m_fastmem_ram_views.push_back(std::move(view.value()));
+    };
+
+    if (!isolate_cache)
+    {
+      // KUSEG - cached
+      MapRAM(0x00000000, !isolate_cache);
+      // MapRAM(0x00200000, !isolate_cache);
+      // MapRAM(0x00400000, !isolate_cache);
+      // MapRAM(0x00600000, !isolate_cache);
+
+      // KSEG0 - cached
+      MapRAM(0x80000000, !isolate_cache);
+      // MapRAM(0x80200000, !isolate_cache);
+      // MapRAM(0x80400000, !isolate_cache);
+      // MapRAM(0x80600000, !isolate_cache);
     }
 
-    m_fastmem_ram_views.push_back(std::move(view.value()));
-  };
-
-  if (!isolate_cache)
-  {
-    // KUSEG - cached
-    MapRAM(0x00000000, !isolate_cache);
-    // MapRAM(0x00200000, !isolate_cache);
-    // MapRAM(0x00400000, !isolate_cache);
-    // MapRAM(0x00600000, !isolate_cache);
-
-    // KSEG0 - cached
-    MapRAM(0x80000000, !isolate_cache);
-    // MapRAM(0x80200000, !isolate_cache);
-    // MapRAM(0x80400000, !isolate_cache);
-    // MapRAM(0x80600000, !isolate_cache);
+    // KSEG1 - uncached
+    MapRAM(0xA0000000, true);
+    // MapRAM(0xA0200000, true);
+    // MapRAM(0xA0400000, true);
+    // MapRAM(0xA0600000, true);
   }
+  else
+  {
+    m_fastmem_base = nullptr;
+    m_fastmem_ram_views.clear();
+    if (!m_fastmem_page_lookup)
+    {
+      m_fastmem_page_lookup = static_cast<u8**>(std::calloc(FASTMEM_PAGE_LOOKUP_COUNT, sizeof(u8*)));
+      Assert(m_fastmem_page_lookup);
 
-  // KSEG1 - uncached
-  MapRAM(0xA0000000, true);
-  // MapRAM(0xA0200000, true);
-  // MapRAM(0xA0400000, true);
-  // MapRAM(0xA0600000, true);
+      Log_InfoPrintf("Fastmem base (software): %p", m_fastmem_page_lookup);
+      CPU::g_state.fastmem_base = reinterpret_cast<u8*>(m_fastmem_page_lookup);
+    }
+    else
+    {
+      // TODO: Remove this
+      std::memset(m_fastmem_page_lookup, 0, FASTMEM_PAGE_LOOKUP_COUNT * sizeof(u8*));
+    }
+
+    auto MapRAM = [](u32 base_address, bool writable) {
+      static_assert(FASTMEM_PAGE_SIZE == CPU_CODE_CACHE_PAGE_SIZE);
+      for (u32 address = 0; address < RAM_SIZE; address += FASTMEM_PAGE_SIZE)
+        SetSoftPageLookup(base_address + address, &g_ram[address], !m_ram_code_bits[AddressToSoftPageIndex(address)]);
+    };
+
+    if (!isolate_cache)
+    {
+      // KUSEG - cached
+      MapRAM(0x00000000, !isolate_cache);
+      MapRAM(0x00200000, !isolate_cache);
+      MapRAM(0x00400000, !isolate_cache);
+      MapRAM(0x00600000, !isolate_cache);
+
+      // KSEG0 - cached
+      MapRAM(0x80000000, !isolate_cache);
+      MapRAM(0x80200000, !isolate_cache);
+      MapRAM(0x80400000, !isolate_cache);
+      MapRAM(0x80600000, !isolate_cache);
+    }
+
+    // KSEG1 - uncached
+    MapRAM(0xA0000000, true);
+    MapRAM(0xA0200000, true);
+    MapRAM(0xA0400000, true);
+    MapRAM(0xA0600000, true);
+  }
 }
 
 bool CanUseFastmemForAddress(VirtualMemoryAddress address)
@@ -352,7 +425,10 @@ bool CanUseFastmemForAddress(VirtualMemoryAddress address)
 
   // Currently since we don't map the mirrors, don't use fastmem for them.
   // This is because the swapping of page code bits for SMC is too expensive.
-  return (paddr < RAM_SIZE);
+  if (!g_settings.cpu_soft_fastmem)
+    return (paddr < RAM_SIZE);
+  else
+    return (paddr < RAM_MIRROR_END);
 }
 
 #endif
@@ -392,15 +468,25 @@ void ClearRAMCodePage(u32 index)
 
 void SetCodePageFastmemProtection(u32 page_index, bool writable)
 {
-  // unprotect fastmem pages
-  for (const auto& view : m_fastmem_ram_views)
+  if (!m_fastmem_page_lookup)
   {
-    u8* page_address = static_cast<u8*>(view.GetBasePointer()) + (page_index * CPU_CODE_CACHE_PAGE_SIZE);
-    if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, writable, false))
+    // unprotect fastmem pages
+    for (const auto& view : m_fastmem_ram_views)
     {
-      Log_ErrorPrintf("Failed to %s code page %u (0x%08X) @ %p", writable ? "unprotect" : "protect", page_index,
-                      page_index * CPU_CODE_CACHE_PAGE_SIZE, page_address);
+      u8* page_address = static_cast<u8*>(view.GetBasePointer()) + (page_index * CPU_CODE_CACHE_PAGE_SIZE);
+      if (!m_memory_arena.SetPageProtection(page_address, CPU_CODE_CACHE_PAGE_SIZE, true, writable, false))
+      {
+        Log_ErrorPrintf("Failed to %s code page %u (0x%08X) @ %p", writable ? "unprotect" : "protect", page_index,
+                        page_index * CPU_CODE_CACHE_PAGE_SIZE, page_address);
+      }
     }
+  }
+  else
+  {
+    // mirrors...
+    const u32 ram_address = page_index * CPU_CODE_CACHE_PAGE_SIZE;
+    for (u32 mirror_start : m_fastmem_ram_mirrors)
+      SetSoftPageLookup(mirror_start + ram_address, &g_ram[ram_address], writable);
   }
 }
 
@@ -411,12 +497,24 @@ void ClearRAMCodePageFlags()
   m_ram_code_bits.reset();
 
 #ifdef WITH_FASTMEM
-  // unprotect fastmem pages
-  for (const auto& view : m_fastmem_ram_views)
+  if (!m_fastmem_page_lookup)
   {
-    if (!m_memory_arena.SetPageProtection(view.GetBasePointer(), view.GetMappingSize(), true, true, false))
+    // unprotect fastmem pages
+    for (const auto& view : m_fastmem_ram_views)
     {
-      Log_ErrorPrintf("Failed to unprotect code pages for fastmem view @ %p", view.GetBasePointer());
+      if (!m_memory_arena.SetPageProtection(view.GetBasePointer(), view.GetMappingSize(), true, true, false))
+      {
+        Log_ErrorPrintf("Failed to unprotect code pages for fastmem view @ %p", view.GetBasePointer());
+      }
+    }
+  }
+  else
+  {
+    for (u32 i = 0; i < CPU_CODE_CACHE_PAGE_COUNT; i++)
+    {
+      const u32 addr = (i * CPU_CODE_CACHE_PAGE_SIZE);
+      for (u32 mirror_start : m_fastmem_ram_mirrors)
+        SetSoftPageLookup(mirror_start + addr, &g_ram[addr], true);
     }
   }
 #endif

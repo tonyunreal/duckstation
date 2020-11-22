@@ -77,6 +77,7 @@ struct Settings
   bool cpu_recompiler_memory_exceptions = false;
   bool cpu_recompiler_icache = false;
   bool cpu_fastmem = true;
+  bool cpu_soft_fastmem = true;
 
   float emulation_speed = 1.0f;
   float fast_forward_speed = 0.0f;
