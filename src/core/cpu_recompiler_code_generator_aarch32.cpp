@@ -1124,6 +1124,45 @@ void CodeGenerator::EmitAddCPUStructField(u32 offset, const Value& value)
   }
 }
 
+void CodeGenerator::EmitLoadGuestRAMFastmem(const Value& address, RegSize size, Value& result)
+{
+  m_emit->ldr(GetHostReg32(RARG4), a32::MemOperand(GetCPUPtrReg(), offsetof(CPU::State, fastmem_base)));
+
+  HostReg address_reg;
+  if (address.IsConstant())
+  {
+    m_emit->Mov(GetHostReg32(RSCRATCH), static_cast<u32>(address.constant_value));
+    address_reg = RSCRATCH;
+  }
+  else
+  {
+    address_reg = address.host_reg;
+  }
+
+  m_emit->lsr(GetHostReg32(RARG1), GetHostReg32(address_reg), 12);
+  m_emit->and_(GetHostReg32(RARG2), GetHostReg32(address_reg), HOST_PAGE_OFFSET_MASK);
+  m_emit->ldr(GetHostReg32(RARG1), a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2));   // pointer load
+
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->ldrb(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_16:
+      m_emit->ldrh(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_32:
+      m_emit->ldr(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+}
+
 void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
                                                Value& result)
 {
@@ -1138,7 +1177,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
   HostReg address_reg;
   if (address.IsConstant())
   {
-    m_emit->Mov(GetHostReg32(RSCRATCH), address.constant_value);
+    m_emit->Mov(GetHostReg32(RSCRATCH), static_cast<u32>(address.constant_value));
     address_reg = RSCRATCH;
   }
   else
@@ -1148,7 +1187,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
 
   m_emit->lsr(GetHostReg32(RARG1), GetHostReg32(address_reg), 12);
   m_emit->and_(GetHostReg32(RARG2), GetHostReg32(address_reg), HOST_PAGE_OFFSET_MASK);
-  m_emit->ldr(GetHostReg64(RARG1), a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2));   // pointer load
+  m_emit->ldr(GetHostReg32(RARG1), a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2));   // pointer load
 
   m_register_cache.InhibitAllocation();
   bpi.host_pc = GetCurrentNearCodePointer();
@@ -1278,7 +1317,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
   HostReg address_reg;
   if (address.IsConstant())
   {
-    m_emit->Mov(GetHostReg32(RSCRATCH), address.constant_value);
+    m_emit->Mov(GetHostReg32(RSCRATCH), static_cast<u32>(address.constant_value));
     address_reg = RSCRATCH;
   }
   else
@@ -1291,7 +1330,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
   m_emit->lsr(GetHostReg32(RARG1), GetHostReg32(address_reg), 12);
   m_emit->and_(GetHostReg32(RARG2), GetHostReg32(address_reg), HOST_PAGE_OFFSET_MASK);
   m_emit->add(GetHostReg32(RARG4), GetHostReg32(RARG4), sizeof(u32*) * Bus::FASTMEM_LUT_NUM_PAGES);
-  m_emit->ldr(GetHostReg64(RARG1),
+  m_emit->ldr(GetHostReg32(RARG1),
               a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2)); // pointer load
 
   m_register_cache.InhibitAllocation();
@@ -1410,6 +1449,37 @@ void CodeGenerator::EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi,
         break;
     }
   }
+}
+
+bool CodeGenerator::BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi)
+{
+  Log_DevPrintf("Backpatching %p (guest PC 0x%08X) to slowmem at %p", lbi.host_pc, lbi.guest_pc, lbi.host_slowmem_pc);
+
+  // turn it into a jump to the slowmem handler
+  vixl::aarch32::MacroAssembler emit(static_cast<vixl::byte*>(lbi.host_pc), lbi.host_code_size,
+                                     a32::A32);
+
+  // check jump distance
+  const s32 displacement = GetPCDisplacement(lbi.host_pc, lbi.host_slowmem_pc);
+  if (!IsPCDisplacementInImmediateRange(displacement))
+  {
+    m_emit->Mov(GetHostReg32(RSCRATCH), reinterpret_cast<uintptr_t>(lbi.host_slowmem_pc));
+    m_emit->bx(GetHostReg32(RSCRATCH));
+  }
+  else
+  {
+    a32::Label label(displacement + m_emit->GetCursorOffset());
+    m_emit->b(&label);
+  }
+
+
+  const s32 nops = (static_cast<s32>(lbi.host_code_size) - static_cast<s32>(emit.GetCursorOffset())) / 4;
+  Assert(nops >= 0);
+  for (s32 i = 0; i < nops; i++)
+    emit.nop();
+
+  JitCodeBuffer::FlushInstructionCache(lbi.host_pc, lbi.host_code_size);
+  return true;
 }
 
 void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr)

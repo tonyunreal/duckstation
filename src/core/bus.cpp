@@ -298,13 +298,16 @@ void UpdateFastmemViews(CPUFastmemMode mode, bool isolate_cache)
 {
 #ifndef WITH_MMAP_FASTMEM
   Assert(mode != CPUFastmemMode::MMap);
+#else
+  m_fastmem_ram_views.clear();
 #endif
 
   m_fastmem_mode = mode;
-  m_fastmem_ram_views.clear();
   if (mode == CPUFastmemMode::Disabled)
   {
+#ifdef WITH_MMAP_FASTMEM
     m_fastmem_base = nullptr;
+#endif
     std::free(m_fastmem_lut);
     m_fastmem_lut = nullptr;
     return;
@@ -382,7 +385,10 @@ void UpdateFastmemViews(CPUFastmemMode mode, bool isolate_cache)
   }
 #endif
 
+#ifdef WITH_MMAP_FASTMEM
   m_fastmem_base = nullptr;
+#endif
+
   if (!m_fastmem_lut)
   {
     m_fastmem_lut = static_cast<u8**>(std::calloc(FASTMEM_LUT_NUM_SLOTS, sizeof(u8*)));
