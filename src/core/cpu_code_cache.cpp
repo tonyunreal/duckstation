@@ -98,7 +98,7 @@ static void UnlinkBlock(CodeBlock* block);
 static void ClearState();
 
 static BlockMap s_blocks;
-static std::array<std::vector<CodeBlock*>, CPU_CODE_CACHE_PAGE_COUNT> m_ram_block_map;
+static std::array<std::vector<CodeBlock*>, Bus::RAM_CODE_PAGE_COUNT> m_ram_block_map;
 
 #ifdef WITH_RECOMPILER
 static HostCodeMap s_host_code_map;
@@ -106,11 +106,14 @@ static HostCodeMap s_host_code_map;
 static void AddBlockToHostCodeMap(CodeBlock* block);
 static void RemoveBlockFromHostCodeMap(CodeBlock* block);
 
-#ifdef WITH_FASTMEM
 static bool InitializeFastmem();
 static void ShutdownFastmem();
-static Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, void* fault_address, bool is_write);
-#endif // WITH_FASTMEM
+static Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, void* fault_address,
+                                                                   bool is_write);
+#ifdef WITH_MMAP_FASTMEM
+static Common::PageFaultHandler::HandlerResult MMapPageFaultHandler(void* exception_pc, void* fault_address,
+                                                                    bool is_write);
+#endif
 #endif // WITH_RECOMPILER
 
 void Initialize()
@@ -130,10 +133,8 @@ void Initialize()
       Panic("Failed to initialize code space");
     }
 
-#ifdef WITH_FASTMEM
     if (g_settings.IsUsingFastmem() && !InitializeFastmem())
       Panic("Failed to initialize fastmem");
-#endif
 
     ResetFastMap();
     CompileDispatcher();
@@ -161,10 +162,8 @@ void ClearState()
 void Shutdown()
 {
   ClearState();
-#ifdef WITH_FASTMEM
-  ShutdownFastmem();
-#endif
 #ifdef WITH_RECOMPILER
+  ShutdownFastmem();
   s_code_buffer.Destroy();
 #endif
 }
@@ -339,10 +338,7 @@ void Reinitialize()
 
 #ifdef WITH_RECOMPILER
 
-#ifdef WITH_FASTMEM
   ShutdownFastmem();
-#endif
-
   s_code_buffer.Destroy();
 
   if (g_settings.IsUsingRecompiler())
@@ -358,10 +354,8 @@ void Reinitialize()
       Panic("Failed to initialize code space");
     }
 
-#ifdef WITH_FASTMEM
     if (g_settings.IsUsingFastmem() && !InitializeFastmem())
       Panic("Failed to initialize fastmem");
-#endif
 
     ResetFastMap();
     CompileDispatcher();
@@ -620,7 +614,7 @@ void FastCompileBlockFunction()
 
 void InvalidateBlocksWithPageIndex(u32 page_index)
 {
-  DebugAssert(page_index < CPU_CODE_CACHE_PAGE_COUNT);
+  DebugAssert(page_index < Bus::RAM_CODE_PAGE_COUNT);
   auto& blocks = m_ram_block_map[page_index];
   for (CodeBlock* block : blocks)
   {
@@ -737,29 +731,38 @@ void RemoveBlockFromHostCodeMap(CodeBlock* block)
   s_host_code_map.erase(hc_iter);
 }
 
-#ifdef WITH_FASTMEM
-
 bool InitializeFastmem()
 {
-  if (!Common::PageFaultHandler::InstallHandler(&s_host_code_map, PageFaultHandler))
+  const CPUFastmemMode mode = g_settings.cpu_fastmem_mode;
+  Assert(mode != CPUFastmemMode::Disabled);
+
+#ifdef WITH_MMAP_FASTMEM
+  const auto handler = (mode == CPUFastmemMode::MMap) ? MMapPageFaultHandler : LUTPageFaultHandler;
+#else
+  const auto handler = LUTPageFaultHandler;
+  Assert(mode != CPUFastmemMode::MMap);
+#endif
+
+  if (!Common::PageFaultHandler::InstallHandler(&s_host_code_map, handler))
   {
     Log_ErrorPrintf("Failed to install page fault handler");
     return false;
   }
 
-  Bus::UpdateFastmemViews(true, g_state.cop0_regs.sr.Isc);
+  Bus::UpdateFastmemViews(mode, g_state.cop0_regs.sr.Isc);
   return true;
 }
 
 void ShutdownFastmem()
 {
   Common::PageFaultHandler::RemoveHandler(&s_host_code_map);
-  Bus::UpdateFastmemViews(false, false);
+  Bus::UpdateFastmemViews(CPUFastmemMode::Disabled, false);
 }
 
-Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, void* fault_address, bool is_write)
+#ifdef WITH_MMAP_FASTMEM
+
+Common::PageFaultHandler::HandlerResult MMapPageFaultHandler(void* exception_pc, void* fault_address, bool is_write)
 {
-#if 0
   if (static_cast<u8*>(fault_address) < g_state.fastmem_base ||
       (static_cast<u8*>(fault_address) - g_state.fastmem_base) >= Bus::FASTMEM_REGION_SIZE)
   {
@@ -822,7 +825,16 @@ Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, voi
       }
     }
   }
-#else
+
+  // we didn't find the pc in our list..
+  Log_ErrorPrintf("Loadstore PC not found for %p in block 0x%08X", exception_pc, block->GetPC());
+  return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
+}
+
+#endif
+
+Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, void* fault_address, bool is_write)
+{
   // use upper_bound to find the next block after the pc
   HostCodeMap::iterator upper_iter =
     s_host_code_map.upper_bound(reinterpret_cast<CodeBlock::HostCodePointer>(exception_pc));
@@ -835,7 +847,7 @@ Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, voi
   // find the loadstore info in the code block
   CodeBlock* block = upper_iter->second;
   for (auto bpi_iter = block->loadstore_backpatch_info.begin(); bpi_iter != block->loadstore_backpatch_info.end();
-    ++bpi_iter)
+       ++bpi_iter)
   {
     Recompiler::LoadStoreBackpatchInfo& lbi = *bpi_iter;
     if (lbi.host_pc == exception_pc)
@@ -854,14 +866,11 @@ Common::PageFaultHandler::HandlerResult PageFaultHandler(void* exception_pc, voi
       }
     }
   }
-#endif
 
   // we didn't find the pc in our list..
   Log_ErrorPrintf("Loadstore PC not found for %p in block 0x%08X", exception_pc, block->GetPC());
   return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
 }
-
-#endif // WITH_FASTMEM
 
 #endif // WITH_RECOMPILER
 

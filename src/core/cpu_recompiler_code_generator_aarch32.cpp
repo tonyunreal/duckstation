@@ -1124,6 +1124,73 @@ void CodeGenerator::EmitAddCPUStructField(u32 offset, const Value& value)
   }
 }
 
+void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
+                                               Value& result)
+{
+  // fastmem
+  LoadStoreBackpatchInfo bpi;
+  bpi.address_host_reg = HostReg_Invalid;
+  bpi.value_host_reg = result.host_reg;
+  bpi.guest_pc = m_current_instruction->pc;
+
+  m_emit->ldr(GetHostReg32(RARG4), a32::MemOperand(GetCPUPtrReg(), offsetof(CPU::State, fastmem_base)));
+
+  HostReg address_reg;
+  if (address.IsConstant())
+  {
+    m_emit->Mov(GetHostReg32(RSCRATCH), address.constant_value);
+    address_reg = RSCRATCH;
+  }
+  else
+  {
+    address_reg = address.host_reg;
+  }
+
+  m_emit->lsr(GetHostReg32(RARG1), GetHostReg32(address_reg), 12);
+  m_emit->and_(GetHostReg32(RARG2), GetHostReg32(address_reg), HOST_PAGE_OFFSET_MASK);
+  m_emit->ldr(GetHostReg64(RARG1), a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2));   // pointer load
+
+  m_register_cache.InhibitAllocation();
+  bpi.host_pc = GetCurrentNearCodePointer();
+
+  switch (size)
+  {
+    case RegSize_8:
+      m_emit->ldrb(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_16:
+      m_emit->ldrh(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_32:
+      m_emit->ldr(GetHostReg32(result.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+
+  EmitAddCPUStructField(offsetof(State, pending_ticks), Value::FromConstantU32(Bus::RAM_READ_TICKS));
+
+  bpi.host_code_size = static_cast<u32>(
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+
+  // generate slowmem fallback
+  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  SwitchToFarCode();
+  EmitLoadGuestMemorySlowmem(cbi, address, size, result, true);
+
+  // return to the block code
+  EmitBranch(GetCurrentNearCodePointer(), false);
+
+  SwitchToNearCode();
+  m_register_cache.UninhibitAllocation();
+
+  m_block->loadstore_backpatch_info.push_back(bpi);
+}
+
 void CodeGenerator::EmitLoadGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address, RegSize size,
                                                Value& result, bool in_far_code)
 {
@@ -1197,6 +1264,73 @@ void CodeGenerator::EmitLoadGuestMemorySlowmem(const CodeBlockInstruction& cbi, 
         break;
     }
   }
+}
+
+void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi, const Value& address, const Value& value)
+{
+  LoadStoreBackpatchInfo bpi;
+  bpi.address_host_reg = HostReg_Invalid;
+  bpi.value_host_reg = value.host_reg;
+  bpi.guest_pc = m_current_instruction->pc;
+
+  m_emit->ldr(GetHostReg32(RARG4), a32::MemOperand(GetCPUPtrReg(), offsetof(CPU::State, fastmem_base)));
+
+  HostReg address_reg;
+  if (address.IsConstant())
+  {
+    m_emit->Mov(GetHostReg32(RSCRATCH), address.constant_value);
+    address_reg = RSCRATCH;
+  }
+  else
+  {
+    address_reg = address.host_reg;
+  }
+
+  // TODO: if this gets backpatched, these instructions are wasted
+
+  m_emit->lsr(GetHostReg32(RARG1), GetHostReg32(address_reg), 12);
+  m_emit->and_(GetHostReg32(RARG2), GetHostReg32(address_reg), HOST_PAGE_OFFSET_MASK);
+  m_emit->add(GetHostReg32(RARG4), GetHostReg32(RARG4), sizeof(u32*) * Bus::FASTMEM_LUT_NUM_PAGES);
+  m_emit->ldr(GetHostReg64(RARG1),
+              a32::MemOperand(GetHostReg32(RARG4), GetHostReg32(RARG1), a32::LSL, 2)); // pointer load
+
+  m_register_cache.InhibitAllocation();
+  bpi.host_pc = GetCurrentNearCodePointer();
+
+  switch (value.size)
+  {
+    case RegSize_8:
+      m_emit->strb(GetHostReg32(value.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_16:
+      m_emit->strh(GetHostReg32(value.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    case RegSize_32:
+      m_emit->str(GetHostReg32(value.host_reg), a32::MemOperand(GetHostReg32(RARG1), GetHostReg32(RARG2)));
+      break;
+
+    default:
+      UnreachableCode();
+      break;
+  }
+
+  bpi.host_code_size = static_cast<u32>(
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+
+  // generate slowmem fallback
+  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  SwitchToFarCode();
+  EmitStoreGuestMemorySlowmem(cbi, address, value, true);
+
+  // return to the block code
+  EmitBranch(GetCurrentNearCodePointer(), false);
+
+  SwitchToNearCode();
+  m_register_cache.UninhibitAllocation();
+
+  m_block->loadstore_backpatch_info.push_back(bpi);
 }
 
 void CodeGenerator::EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi, const Value& address,
