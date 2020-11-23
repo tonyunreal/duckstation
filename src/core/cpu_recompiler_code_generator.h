@@ -80,6 +80,8 @@ public:
   void EmitLoadGlobalAddress(HostReg host_reg, const void* ptr);
 
   // Automatically generates an exception handler.
+  Value GetFastmemLoadBase();
+  Value GetFastmemStoreBase();
   Value EmitLoadGuestMemory(const CodeBlockInstruction& cbi, const Value& address, const SpeculativeValue& address_spec,
                             RegSize size);
   void EmitLoadGuestRAMFastmem(const Value& address, RegSize size, Value& result);
@@ -248,6 +250,9 @@ private:
   bool m_current_instruction_was_branch_taken_dirty = false;
   bool m_load_delay_dirty = false;
   bool m_next_load_delay_dirty = false;
+
+  bool m_fastmem_load_base_in_register = false;
+  bool m_fastmem_store_base_in_register = false;
 
   //////////////////////////////////////////////////////////////////////////
   // Speculative Constants
