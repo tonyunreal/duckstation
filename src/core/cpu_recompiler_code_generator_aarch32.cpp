@@ -839,6 +839,8 @@ void CodeGenerator::EmitSetConditionResult(HostReg to_reg, RegSize to_size, Cond
 
 u32 CodeGenerator::PrepareStackForCall()
 {
+  m_fastmem_load_base_in_register = false;
+  m_fastmem_store_base_in_register = false;
   m_register_cache.PushCallerSavedRegisters();
   return 0;
 }
@@ -949,7 +951,6 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG1, arg1);
   EmitCopyValue(RARG2, arg2);
   EmitCopyValue(RARG3, arg3);
-  m_fastmem_store_base_in_register = false;
 
   // actually call the function
   EmitCall(ptr);
@@ -979,8 +980,6 @@ void CodeGenerator::EmitFunctionCallPtr(Value* return_value, const void* ptr, co
   EmitCopyValue(RARG2, arg2);
   EmitCopyValue(RARG3, arg3);
   EmitCopyValue(RARG4, arg4);
-  m_fastmem_store_base_in_register = false;
-  m_fastmem_load_base_in_register = false;
 
   // actually call the function
   EmitCall(ptr);
@@ -1142,11 +1141,11 @@ Value CodeGenerator::GetFastmemLoadBase()
 Value CodeGenerator::GetFastmemStoreBase()
 {
   Value val = Value::FromHostReg(&m_register_cache, RARG3, RegSize_32);
-  if (!m_fastmem_load_base_in_register)
+  if (!m_fastmem_store_base_in_register)
   {
     m_emit->ldr(GetHostReg32(val), a32::MemOperand(GetCPUPtrReg(), offsetof(CPU::State, fastmem_base)));
     m_emit->add(GetHostReg32(val), GetHostReg32(val), sizeof(u32*) * Bus::FASTMEM_LUT_NUM_PAGES);
-    m_fastmem_load_base_in_register = true;
+    m_fastmem_store_base_in_register = true;
   }
 
   return val;
@@ -1246,10 +1245,17 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
   bpi.host_code_size = static_cast<u32>(
     static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
 
+  const bool old_store_fastmem_base = m_fastmem_store_base_in_register;
+
   // generate slowmem fallback
   bpi.host_slowmem_pc = GetCurrentFarCodePointer();
   SwitchToFarCode();
   EmitLoadGuestMemorySlowmem(cbi, address, size, result, true);
+
+  // restore fastmem base state for the next instruction
+  if (old_store_fastmem_base)
+    fastmem_base = GetFastmemStoreBase();
+  fastmem_base = GetFastmemLoadBase();
 
   // return to the block code
   EmitBranch(GetCurrentNearCodePointer(), false);
@@ -1389,10 +1395,17 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
   bpi.host_code_size = static_cast<u32>(
     static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
 
+  const bool old_load_fastmem_base = m_fastmem_load_base_in_register;
+
   // generate slowmem fallback
   bpi.host_slowmem_pc = GetCurrentFarCodePointer();
   SwitchToFarCode();
   EmitStoreGuestMemorySlowmem(cbi, address, actual_value, true);
+
+  // restore fastmem base state for the next instruction
+  if (old_load_fastmem_base)
+    fastmem_base = GetFastmemLoadBase();
+  fastmem_base = GetFastmemStoreBase();
 
   // return to the block code
   EmitBranch(GetCurrentNearCodePointer(), false);
