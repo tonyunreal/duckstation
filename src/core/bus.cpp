@@ -283,13 +283,10 @@ static u32 AddressToSoftPageIndex(u32 address)
   return address >> 12;
 }
 
-static void SetSoftPageLookup(u32 address, u8* ptr, u8 ticks, bool writable)
+static ALWAYS_INLINE void SetSoftPageLookup(u32 address, u8* ptr, bool writable)
 {
   m_fastmem_page_lookup[AddressToSoftPageIndex(address)] = ptr;
   m_fastmem_page_lookup[FASTMEM_NUM_PAGES + AddressToSoftPageIndex(address)] = writable ? ptr : nullptr;
-
-  u8* cycle_base = reinterpret_cast<u8*>(&m_fastmem_page_lookup[FASTMEM_PAGE_CYCLE_LOOKUP_OFFSET]);
-  cycle_base[AddressToSoftPageIndex(address)] = ticks;
 }
 
 void UnmapFastmemViews()
@@ -381,7 +378,7 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
     m_fastmem_ram_views.clear();
     if (!m_fastmem_page_lookup)
     {
-      m_fastmem_page_lookup = static_cast<u8**>(std::calloc(FASTMEM_LUT_SLOTS, sizeof(u8*)));
+      m_fastmem_page_lookup = static_cast<u8**>(std::calloc(FASTMEM_PAGE_LOOKUP_COUNT, sizeof(u8*)));
       Assert(m_fastmem_page_lookup);
 
       Log_InfoPrintf("Fastmem base (software): %p", m_fastmem_page_lookup);
@@ -390,27 +387,13 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
     else
     {
       // TODO: Remove this
-      std::memset(m_fastmem_page_lookup, 0, FASTMEM_LUT_SLOTS * sizeof(u8*));
+      std::memset(m_fastmem_page_lookup, 0, FASTMEM_PAGE_LOOKUP_COUNT * sizeof(u8*));
     }
 
     auto MapRAM = [](u32 base_address, bool writable) {
       static_assert(FASTMEM_PAGE_SIZE == CPU_CODE_CACHE_PAGE_SIZE);
       for (u32 address = 0; address < RAM_SIZE; address += FASTMEM_PAGE_SIZE)
-      {
-        SetSoftPageLookup(base_address + address, &g_ram[address], RAM_READ_TICKS,
-                          !m_ram_code_bits[AddressToSoftPageIndex(address)]);
-      }
-    };
-
-    auto MapScratchpad = [](u32 base_address, bool writable) {
-      SetSoftPageLookup(base_address, CPU::g_state.dcache.data(), 0, true);
-    };
-
-    auto MapBIOS = [](u32 base_address) {
-      for (u32 address = 0; address < BIOS_SIZE; address += FASTMEM_PAGE_SIZE)
-      {
-        SetSoftPageLookup(base_address + address, &g_bios[address], m_bios_access_time[0], false);
-      }
+        SetSoftPageLookup(base_address + address, &g_ram[address], !m_ram_code_bits[AddressToSoftPageIndex(address)]);
     };
 
     if (!isolate_cache)
@@ -420,16 +403,12 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
       MapRAM(0x00200000, !isolate_cache);
       MapRAM(0x00400000, !isolate_cache);
       MapRAM(0x00600000, !isolate_cache);
-      MapScratchpad(0x1F800000, false);
-      MapBIOS(0x1FC00000);
 
       // KSEG0 - cached
       MapRAM(0x80000000, !isolate_cache);
       MapRAM(0x80200000, !isolate_cache);
       MapRAM(0x80400000, !isolate_cache);
       MapRAM(0x80600000, !isolate_cache);
-      MapScratchpad(0x9F800000, false);
-      MapBIOS(0x9FC00000);
     }
 
     // KSEG1 - uncached
@@ -437,7 +416,6 @@ void UpdateFastmemViews(bool enabled, bool isolate_cache)
     MapRAM(0xA0200000, true);
     MapRAM(0xA0400000, true);
     MapRAM(0xA0600000, true);
-    MapBIOS(0xAFC00000);
   }
 }
 
@@ -448,14 +426,9 @@ bool CanUseFastmemForAddress(VirtualMemoryAddress address)
   // Currently since we don't map the mirrors, don't use fastmem for them.
   // This is because the swapping of page code bits for SMC is too expensive.
   if (!g_settings.cpu_soft_fastmem)
-  {
-    return (paddr < RAM_SIZE) || (paddr >= CPU::DCACHE_LOCATION && paddr < (CPU::DCACHE_LOCATION + CPU::DCACHE_SIZE)) ||
-           (paddr >= BIOS_BASE && paddr < (BIOS_BASE + BIOS_SIZE));
-  }
+    return (paddr < RAM_SIZE);
   else
-  {
     return (paddr < RAM_MIRROR_END);
-  }
 }
 
 #endif
@@ -513,7 +486,7 @@ void SetCodePageFastmemProtection(u32 page_index, bool writable)
     // mirrors...
     const u32 ram_address = page_index * CPU_CODE_CACHE_PAGE_SIZE;
     for (u32 mirror_start : m_fastmem_ram_mirrors)
-      SetSoftPageLookup(mirror_start + ram_address, &g_ram[ram_address], RAM_READ_TICKS, writable);
+      SetSoftPageLookup(mirror_start + ram_address, &g_ram[ram_address], writable);
   }
 }
 
@@ -541,7 +514,7 @@ void ClearRAMCodePageFlags()
     {
       const u32 addr = (i * CPU_CODE_CACHE_PAGE_SIZE);
       for (u32 mirror_start : m_fastmem_ram_mirrors)
-        SetSoftPageLookup(mirror_start + addr, &g_ram[addr], RAM_READ_TICKS, true);
+        SetSoftPageLookup(mirror_start + addr, &g_ram[addr], true);
     }
   }
 #endif

@@ -1839,7 +1839,6 @@ void CodeGenerator::EmitLoadGuestRAMFastmem(const Value& address, RegSize size, 
       m_emit->mov(GetHostReg32(result.host_reg), m_emit->dword[GetHostReg64(RARG1) + GetHostReg64(RARG2)]);
       break;
   }
-
 #endif
 }
 
@@ -1920,9 +1919,6 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
   m_emit->mov(GetHostReg32(RARG2), GetHostReg32(RARG1));
   m_emit->shr(GetHostReg32(RARG1), 12);
   m_emit->and_(GetHostReg32(RARG2), Bus::FASTMEM_PAGE_OFFSET_MASK);
-  m_emit->movzx(
-    GetHostReg32(RARG3),
-    m_emit->byte[GetFastmemBasePtrReg() + (Bus::FASTMEM_PAGE_CYCLE_LOOKUP_OFFSET * 8) + GetHostReg64(RARG1)]);
   m_emit->mov(GetHostReg64(RARG1), m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8]);
   bpi.host_pc = GetCurrentNearCodePointer();
 
@@ -1942,7 +1938,8 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
   }
 #endif
 
-  m_emit->add(m_emit->dword[GetCPUPtrReg() + offsetof(CPU::State, pending_ticks)], GetHostReg32(RARG3));
+  // TODO: BIOS reads...
+  EmitAddCPUStructField(offsetof(CPU::State, pending_ticks), Value::FromConstantU32(Bus::RAM_READ_TICKS));
 
   // insert nops, we need at least 5 bytes for a relative jump
   const u32 fastmem_size =

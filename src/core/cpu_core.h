@@ -20,7 +20,6 @@ enum : PhysicalMemoryAddress
   DCACHE_LOCATION_MASK = UINT32_C(0xFFFFFC00),
   DCACHE_OFFSET_MASK = UINT32_C(0x000003FF),
   DCACHE_SIZE = UINT32_C(0x00000400),
-  DCACHE_STORAGE_SIZE = UINT32_C(0x1000),
   ICACHE_SIZE = UINT32_C(0x00001000),
   ICACHE_SLOTS = ICACHE_SIZE / sizeof(u32),
   ICACHE_LINE_SIZE = 16,
@@ -78,7 +77,7 @@ struct State
   u8* fastmem_base = nullptr;
 
   // data cache (used as scratchpad)
-  std::array<u8, DCACHE_STORAGE_SIZE> dcache = {};
+  std::array<u8, DCACHE_SIZE> dcache = {};
   std::array<u32, ICACHE_LINES> icache_tags = {};
   std::array<u8, ICACHE_SIZE> icache_data = {};
 };
