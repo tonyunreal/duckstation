@@ -122,7 +122,7 @@ bool DoState(StateWrapper& sw)
   sw.Do(&g_state.next_load_delay_reg);
   sw.Do(&g_state.next_load_delay_value);
   sw.Do(&g_state.cache_control.bits);
-  sw.DoBytes(g_state.dcache.data(), g_state.dcache.size());
+  sw.DoBytes(g_state.dcache.data(), DCACHE_SIZE);
 
   if (!GTE::DoState(sw))
     return false;
