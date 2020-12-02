@@ -24,6 +24,10 @@ constexpr bool USE_BLOCK_LINKING = true;
 #if !defined(__HAIKU__) && !defined(__APPLE__)
 #define USE_STATIC_CODE_BUFFER 1
 #endif
+#if defined(__APPLE__) && defined(CPU_AARCH64)
+// macOS on AArch64 enforces W^X.
+#define USE_DOUBLE_MAPPING 1
+#endif
 
 #if defined(AARCH32)
 // Use a smaller code buffer size on AArch32 to have a better chance of being in range.
@@ -123,9 +127,11 @@ void Initialize()
 #ifdef WITH_RECOMPILER
   if (g_settings.IsUsingRecompiler())
   {
-#ifdef USE_STATIC_CODE_BUFFER
+#if defined(USE_STATIC_CODE_BUFFER)
     if (!s_code_buffer.Initialize(s_code_storage, sizeof(s_code_storage), RECOMPILER_FAR_CODE_CACHE_SIZE,
                                   RECOMPILER_GUARD_SIZE))
+#elif defined(USE_DOUBLE_MAPPING)
+    if (!s_code_buffer.AllocateDoubleMapped(RECOMPILER_CODE_CACHE_SIZE, RECOMPILER_FAR_CODE_CACHE_SIZE))
 #else
     if (!s_code_buffer.Allocate(RECOMPILER_CODE_CACHE_SIZE, RECOMPILER_FAR_CODE_CACHE_SIZE))
 #endif
@@ -317,7 +323,7 @@ void ExecuteRecompiler()
       const u32 pc = g_state.regs.pc;
       g_state.current_instruction_pc = pc;
       const u32 fast_map_index = GetFastMapIndex(pc);
-      s_single_block_asm_dispatcher[fast_map_index]();
+      s_single_block_asm_dispatcher(s_fast_map[fast_map_index]);
     }
 
     TimingEvents::RunEvents();
@@ -812,7 +818,7 @@ Common::PageFaultHandler::HandlerResult MMapPageFaultHandler(void* exception_pc,
       }
 
       // found it, do fixup
-      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi))
+      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi, &s_code_buffer))
       {
         // remove the backpatch entry since we won't be coming back to this one
         block->loadstore_backpatch_info.erase(bpi_iter);
@@ -853,7 +859,7 @@ Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, 
     if (lbi.host_pc == exception_pc)
     {
       // found it, do fixup
-      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi))
+      if (Recompiler::CodeGenerator::BackpatchLoadStore(lbi, &s_code_buffer))
       {
         // remove the backpatch entry since we won't be coming back to this one
         block->loadstore_backpatch_info.erase(bpi_iter);

@@ -315,12 +315,23 @@ void CodeGenerator::ConvertValueSizeInPlace(Value* value, RegSize size, bool sig
   value->size = size;
 }
 
-void* CodeGenerator::GetCurrentCodePointer() const
+void* CodeGenerator::GetCurrentCodeWritePointer() const
 {
   if (m_emit == &m_near_emitter)
-    return GetCurrentNearCodePointer();
+    return GetCurrentNearCodeWritePointer();
   else if (m_emit == &m_far_emitter)
-    return GetCurrentFarCodePointer();
+    return GetCurrentFarCodeWritePointer();
+
+  Panic("unknown emitter");
+  return nullptr;
+}
+
+void* CodeGenerator::GetCurrentCodeExecutePointer() const
+{
+  if (m_emit == &m_near_emitter)
+    return GetCurrentNearCodeExecutePointer();
+  else if (m_emit == &m_far_emitter)
+    return GetCurrentFarCodeExecutePointer();
 
   Panic("unknown emitter");
   return nullptr;
@@ -886,7 +897,7 @@ void CodeGenerator::GenerateExceptionExit(const CodeBlockInstruction& cbi, Excep
 
   m_register_cache.PushState();
 
-  EmitBranch(GetCurrentFarCodePointer());
+  EmitBranch(GetCurrentFarCodeExecutePointer());
 
   SwitchToFarCode();
   EmitFunctionCall(nullptr, static_cast<void (*)(u32, u32)>(&CPU::RaiseException), CAUSE_bits,
@@ -2009,7 +2020,7 @@ bool CodeGenerator::Compile_Branch(const CodeBlockInstruction& cbi)
 
       // exception exit for misaligned target
       m_register_cache.PushState();
-      EmitBranch(GetCurrentFarCodePointer());
+      EmitBranch(GetCurrentFarCodeExecutePointer());
       EmitBindLabel(&branch_okay);
 
       SwitchToFarCode();

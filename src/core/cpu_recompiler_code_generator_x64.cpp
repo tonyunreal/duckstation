@@ -89,8 +89,9 @@ static const Xbyak::Reg64 GetFastmemBasePtrReg()
 
 CodeGenerator::CodeGenerator(JitCodeBuffer* code_buffer)
   : m_code_buffer(code_buffer), m_register_cache(*this),
-    m_near_emitter(code_buffer->GetFreeCodeSpace(), code_buffer->GetFreeCodePointer()),
-    m_far_emitter(code_buffer->GetFreeFarCodeSpace(), code_buffer->GetFreeFarCodePointer()), m_emit(&m_near_emitter)
+    m_near_emitter(code_buffer->GetFreeCodeSpace(), code_buffer->GetFreeCodeWritePointer()),
+    m_far_emitter(code_buffer->GetFreeFarCodeSpace(), code_buffer->GetFreeFarCodeWritePointer()),
+    m_emit(&m_near_emitter)
 {
   InitHostRegs();
 }
@@ -176,14 +177,26 @@ void CodeGenerator::SwitchToNearCode()
   m_emit = &m_near_emitter;
 }
 
-void* CodeGenerator::GetCurrentNearCodePointer() const
+void* CodeGenerator::GetCurrentNearCodeWritePointer() const
 {
   return m_near_emitter.getCurr<void*>();
 }
 
-void* CodeGenerator::GetCurrentFarCodePointer() const
+void* CodeGenerator::GetCurrentFarCodeWritePointer() const
 {
   return m_far_emitter.getCurr<void*>();
+}
+
+void* CodeGenerator::GetCurrentNearCodeExecutePointer() const
+{
+  const ptrdiff_t offset = m_near_emitter.getCurr<u8*>() - m_code_buffer->GetCodeWritePointer();
+  return m_code_buffer->GetCodeExecutePointer() + offset;
+}
+
+void* CodeGenerator::GetCurrentFarCodeExecutePointer() const
+{
+  const ptrdiff_t offset = m_far_emitter.getCurr<u8*>() - m_code_buffer->GetFarCodeWritePointer();
+  return m_code_buffer->GetFarCodeExecutePointer() + offset;
 }
 
 Value CodeGenerator::GetValueInHostRegister(const Value& value, bool allow_zero_register /* = true */)
@@ -255,7 +268,7 @@ void CodeGenerator::EmitExceptionExitOnBool(const Value& value)
   Assert(!value.IsConstant() && value.IsInHostRegister());
 
   m_emit->test(GetHostReg8(value), GetHostReg8(value));
-  m_emit->jnz(GetCurrentFarCodePointer());
+  m_emit->jnz(GetCurrentFarCodeWritePointer());
 
   m_register_cache.PushState();
 
@@ -273,7 +286,7 @@ void CodeGenerator::FinalizeBlock(CodeBlock::HostCodePointer* out_host_code, u32
 
   const u32 near_size = static_cast<u32>(m_near_emitter.getSize());
   const u32 far_size = static_cast<u32>(m_far_emitter.getSize());
-  *out_host_code = m_near_emitter.getCode<CodeBlock::HostCodePointer>();
+  *out_host_code = reinterpret_cast<CodeBlock::HostCodePointer>(m_code_buffer->GetFreeCodeExecutePointer());
   *out_host_code_size = near_size;
   m_code_buffer->CommitCode(near_size);
   m_code_buffer->CommitFarCode(far_size);
@@ -1431,9 +1444,11 @@ void CodeGenerator::RestoreStackAfterCall(u32 adjust_size)
 
 void CodeGenerator::EmitCall(const void* ptr)
 {
-  if (Xbyak::inner::IsInInt32(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(m_emit->getCurr())))
+  const ptrdiff_t offset =
+    reinterpret_cast<ptrdiff_t>(ptr) - reinterpret_cast<ptrdiff_t>(GetCurrentCodeExecutePointer());
+  if (Xbyak::inner::IsInInt32(static_cast<u64>(offset)))
   {
-    m_emit->call(ptr);
+    m_emit->call(reinterpret_cast<void*>(reinterpret_cast<ptrdiff_t>(GetCurrentCodeWritePointer()) + offset));
   }
   else
   {
@@ -1850,7 +1865,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
 {
   // fastmem
   LoadStoreBackpatchInfo bpi;
-  bpi.host_pc = GetCurrentNearCodePointer();
+  bpi.host_pc = GetCurrentNearCodeExecutePointer();
   bpi.address_host_reg = HostReg_Invalid;
   bpi.value_host_reg = result.host_reg;
   bpi.guest_pc = m_current_instruction->pc;
@@ -1863,7 +1878,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
     {
       actual_address = &result;
       m_emit->mov(GetHostReg32(result.host_reg), address.constant_value);
-      bpi.host_pc = GetCurrentNearCodePointer();
+      bpi.host_pc = GetCurrentNearCodeExecutePointer();
     }
 
     m_register_cache.InhibitAllocation();
@@ -1926,7 +1941,7 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
     m_emit->shr(GetHostReg32(RARG1), 12);
     m_emit->and_(GetHostReg32(RARG2), HOST_PAGE_OFFSET_MASK);
     m_emit->mov(GetHostReg64(RARG1), m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8]);
-    bpi.host_pc = GetCurrentNearCodePointer();
+    bpi.host_pc = GetCurrentNearCodeExecutePointer();
 
     switch (size)
     {
@@ -1949,22 +1964,22 @@ void CodeGenerator::EmitLoadGuestMemoryFastmem(const CodeBlockInstruction& cbi, 
 
   // insert nops, we need at least 5 bytes for a relative jump
   const u32 fastmem_size =
-    static_cast<u32>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc));
+    static_cast<u32>(static_cast<u8*>(GetCurrentNearCodeExecutePointer()) - static_cast<u8*>(bpi.host_pc));
   const u32 nops = (fastmem_size < 5 ? 5 - fastmem_size : 0);
   for (u32 i = 0; i < nops; i++)
     m_emit->nop();
 
   bpi.host_code_size = static_cast<u32>(
-    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodeExecutePointer()) - static_cast<u8*>(bpi.host_pc)));
 
   // generate slowmem fallback
   m_far_emitter.align(16);
-  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  bpi.host_slowmem_pc = GetCurrentFarCodeExecutePointer();
   SwitchToFarCode();
   EmitLoadGuestMemorySlowmem(cbi, address, size, result, true);
 
   // return to the block code
-  m_emit->jmp(GetCurrentNearCodePointer());
+  m_emit->jmp(GetCurrentNearCodeWritePointer());
 
   SwitchToNearCode();
   m_register_cache.UninhibitAllocation();
@@ -1998,7 +2013,7 @@ void CodeGenerator::EmitLoadGuestMemorySlowmem(const CodeBlockInstruction& cbi, 
     }
 
     m_emit->test(GetHostReg64(result.host_reg), GetHostReg64(result.host_reg));
-    m_emit->js(GetCurrentFarCodePointer());
+    m_emit->js(GetCurrentFarCodeWritePointer());
 
     m_register_cache.PushState();
 
@@ -2049,7 +2064,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
 {
   // fastmem
   LoadStoreBackpatchInfo bpi;
-  bpi.host_pc = GetCurrentNearCodePointer();
+  bpi.host_pc = GetCurrentNearCodeExecutePointer();
   bpi.address_host_reg = HostReg_Invalid;
   bpi.value_host_reg = value.host_reg;
   bpi.guest_pc = m_current_instruction->pc;
@@ -2064,7 +2079,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
       temp_address.SetHostReg(&m_register_cache, RRETURN, RegSize_32);
       actual_address = &temp_address;
       m_emit->mov(GetHostReg32(temp_address), address.constant_value);
-      bpi.host_pc = GetCurrentNearCodePointer();
+      bpi.host_pc = GetCurrentNearCodeExecutePointer();
     }
 
     m_register_cache.InhibitAllocation();
@@ -2173,7 +2188,7 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
     m_emit->and_(GetHostReg32(RARG2), HOST_PAGE_OFFSET_MASK);
     m_emit->mov(GetHostReg64(RARG1),
                 m_emit->qword[GetFastmemBasePtrReg() + GetHostReg64(RARG1) * 8 + (Bus::FASTMEM_LUT_NUM_PAGES * 8)]);
-    bpi.host_pc = GetCurrentNearCodePointer();
+    bpi.host_pc = GetCurrentNearCodeExecutePointer();
 
     switch (value.size)
     {
@@ -2208,23 +2223,23 @@ void CodeGenerator::EmitStoreGuestMemoryFastmem(const CodeBlockInstruction& cbi,
 
   // insert nops, we need at least 5 bytes for a relative jump
   const u32 fastmem_size =
-    static_cast<u32>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc));
+    static_cast<u32>(static_cast<u8*>(GetCurrentNearCodeExecutePointer()) - static_cast<u8*>(bpi.host_pc));
   const u32 nops = (fastmem_size < 5 ? 5 - fastmem_size : 0);
   for (u32 i = 0; i < nops; i++)
     m_emit->nop();
 
   bpi.host_code_size = static_cast<u32>(
-    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodePointer()) - static_cast<u8*>(bpi.host_pc)));
+    static_cast<ptrdiff_t>(static_cast<u8*>(GetCurrentNearCodeExecutePointer()) - static_cast<u8*>(bpi.host_pc)));
 
   // generate slowmem fallback
   m_far_emitter.align();
-  bpi.host_slowmem_pc = GetCurrentFarCodePointer();
+  bpi.host_slowmem_pc = GetCurrentFarCodeExecutePointer();
   SwitchToFarCode();
 
   EmitStoreGuestMemorySlowmem(cbi, address, value, true);
 
   // return to the block code
-  m_emit->jmp(GetCurrentNearCodePointer());
+  m_emit->jmp(GetCurrentNearCodeWritePointer());
 
   SwitchToNearCode();
   m_register_cache.UninhibitAllocation();
@@ -2262,7 +2277,7 @@ void CodeGenerator::EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi,
     m_register_cache.PushState();
 
     m_emit->test(GetHostReg32(result), GetHostReg32(result));
-    m_emit->jnz(GetCurrentFarCodePointer());
+    m_emit->jnz(GetCurrentFarCodeWritePointer());
 
     // store exception path
     if (!in_far_code)
@@ -2304,16 +2319,20 @@ void CodeGenerator::EmitStoreGuestMemorySlowmem(const CodeBlockInstruction& cbi,
   }
 }
 
-bool CodeGenerator::BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi)
+bool CodeGenerator::BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi, JitCodeBuffer* code_buffer)
 {
   Log_DevPrintf("Backpatching %p (guest PC 0x%08X) to slowmem", lbi.host_pc, lbi.guest_pc);
 
-  // turn it into a jump to the slowmem handler
-  Xbyak::CodeGenerator cg(lbi.host_code_size, lbi.host_pc);
-  cg.jmp(lbi.host_slowmem_pc);
+  const ptrdiff_t code_offset = static_cast<u8*>(lbi.host_pc) - code_buffer->GetCodeExecutePointer();
+  const ptrdiff_t trampoline_offset = static_cast<u8*>(lbi.host_slowmem_pc) - code_buffer->GetFarCodeExecutePointer();
 
-  const s32 nops = static_cast<s32>(lbi.host_code_size) -
-                   static_cast<s32>(static_cast<ptrdiff_t>(cg.getCurr() - static_cast<u8*>(lbi.host_pc)));
+  // turn it into a jump to the slowmem handler
+  u8* dest_code = code_buffer->GetCodeWritePointer() + code_offset;
+  Xbyak::CodeGenerator cg(lbi.host_code_size, dest_code);
+  cg.jmp(code_buffer->GetFarCodeWritePointer() + trampoline_offset);
+
+  const s32 nops =
+    static_cast<s32>(lbi.host_code_size) - static_cast<s32>(static_cast<ptrdiff_t>(cg.getCurr() - dest_code));
   Assert(nops >= 0);
   for (s32 i = 0; i < nops; i++)
     cg.nop();
@@ -2325,25 +2344,27 @@ bool CodeGenerator::BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi)
 void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr)
 {
   const s64 displacement =
-    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(m_emit->getCurr())) + 2;
-  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement)))
+    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(GetCurrentCodeExecutePointer()));
+  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement + 2)))
   {
+    const void* write_ptr =
+      reinterpret_cast<const void*>(reinterpret_cast<ptrdiff_t>(GetCurrentCodeWritePointer()) + displacement);
     switch (size)
     {
       case RegSize_8:
-        m_emit->mov(GetHostReg8(host_reg), m_emit->byte[m_emit->rip + ptr]);
+        m_emit->mov(GetHostReg8(host_reg), m_emit->byte[m_emit->rip + write_ptr]);
         break;
 
       case RegSize_16:
-        m_emit->mov(GetHostReg16(host_reg), m_emit->word[m_emit->rip + ptr]);
+        m_emit->mov(GetHostReg16(host_reg), m_emit->word[m_emit->rip + write_ptr]);
         break;
 
       case RegSize_32:
-        m_emit->mov(GetHostReg32(host_reg), m_emit->dword[m_emit->rip + ptr]);
+        m_emit->mov(GetHostReg32(host_reg), m_emit->dword[m_emit->rip + write_ptr]);
         break;
 
       case RegSize_64:
-        m_emit->mov(GetHostReg64(host_reg), m_emit->qword[m_emit->rip + ptr]);
+        m_emit->mov(GetHostReg64(host_reg), m_emit->qword[m_emit->rip + write_ptr]);
         break;
 
       default:
@@ -2389,35 +2410,37 @@ void CodeGenerator::EmitStoreGlobal(void* ptr, const Value& value)
   DebugAssert(value.IsInHostRegister() || value.IsConstant());
 
   const s64 displacement =
-    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(m_emit->getCurr()));
-  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement)))
+    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(GetCurrentCodeExecutePointer()));
+  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement + 2)))
   {
+    const void* write_ptr =
+      reinterpret_cast<const void*>(reinterpret_cast<ptrdiff_t>(GetCurrentCodeWritePointer()) + displacement);
     switch (value.size)
     {
       case RegSize_8:
       {
         if (value.IsConstant())
-          m_emit->mov(m_emit->byte[m_emit->rip + ptr], value.constant_value);
+          m_emit->mov(m_emit->byte[m_emit->rip + write_ptr], value.constant_value);
         else
-          m_emit->mov(m_emit->byte[m_emit->rip + ptr], GetHostReg8(value.host_reg));
+          m_emit->mov(m_emit->byte[m_emit->rip + write_ptr], GetHostReg8(value.host_reg));
       }
       break;
 
       case RegSize_16:
       {
         if (value.IsConstant())
-          m_emit->mov(m_emit->word[m_emit->rip + ptr], value.constant_value);
+          m_emit->mov(m_emit->word[m_emit->rip + write_ptr], value.constant_value);
         else
-          m_emit->mov(m_emit->word[m_emit->rip + ptr], GetHostReg16(value.host_reg));
+          m_emit->mov(m_emit->word[m_emit->rip + write_ptr], GetHostReg16(value.host_reg));
       }
       break;
 
       case RegSize_32:
       {
         if (value.IsConstant())
-          m_emit->mov(m_emit->dword[m_emit->rip + ptr], value.constant_value);
+          m_emit->mov(m_emit->dword[m_emit->rip + write_ptr], value.constant_value);
         else
-          m_emit->mov(m_emit->dword[m_emit->rip + ptr], GetHostReg32(value.host_reg));
+          m_emit->mov(m_emit->dword[m_emit->rip + write_ptr], GetHostReg32(value.host_reg));
       }
       break;
 
@@ -2430,16 +2453,16 @@ void CodeGenerator::EmitStoreGlobal(void* ptr, const Value& value)
           {
             Value temp = m_register_cache.AllocateScratch(RegSize_64);
             EmitCopyValue(temp.host_reg, value);
-            m_emit->mov(m_emit->qword[m_emit->rip + ptr], GetHostReg64(temp.host_reg));
+            m_emit->mov(m_emit->qword[m_emit->rip + write_ptr], GetHostReg64(temp.host_reg));
           }
           else
           {
-            m_emit->mov(m_emit->qword[m_emit->rip + ptr], value.constant_value);
+            m_emit->mov(m_emit->qword[m_emit->rip + write_ptr], value.constant_value);
           }
         }
         else
         {
-          m_emit->mov(m_emit->qword[m_emit->rip + ptr], GetHostReg64(value.host_reg));
+          m_emit->mov(m_emit->qword[m_emit->rip + write_ptr], GetHostReg64(value.host_reg));
         }
       }
       break;
@@ -2628,11 +2651,14 @@ void CodeGenerator::EmitICacheCheckAndUpdate()
 
 void CodeGenerator::EmitBranch(const void* address, bool allow_scratch)
 {
+  // These are assumed to be execute addresses, so we need to convert it to a write offset.
   const s64 jump_distance =
-    static_cast<s64>(reinterpret_cast<intptr_t>(address) - reinterpret_cast<intptr_t>(GetCurrentCodePointer()));
+    static_cast<s64>(reinterpret_cast<intptr_t>(address) - reinterpret_cast<intptr_t>(GetCurrentCodeExecutePointer()));
   if (Xbyak::inner::IsInInt32(static_cast<u64>(jump_distance)))
   {
-    m_emit->jmp(address);
+    const void* write_address = reinterpret_cast<void*>(reinterpret_cast<intptr_t>(GetCurrentCodeWritePointer()) +
+                                                        static_cast<intptr_t>(jump_distance));
+    m_emit->jmp(write_address);
     return;
   }
 
@@ -2882,11 +2908,17 @@ void CodeGenerator::EmitBindLabel(LabelType* label)
 void CodeGenerator::EmitLoadGlobalAddress(HostReg host_reg, const void* ptr)
 {
   const s64 displacement =
-    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(m_emit->getCurr())) + 2;
-  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement)))
-    m_emit->lea(GetHostReg64(host_reg), m_emit->dword[m_emit->rip + ptr]);
+    static_cast<s64>(reinterpret_cast<size_t>(ptr) - reinterpret_cast<size_t>(GetCurrentCodeExecutePointer()));
+  if (Xbyak::inner::IsInInt32(static_cast<u64>(displacement + 2)))
+  {
+    const void* write_ptr =
+      reinterpret_cast<const void*>(reinterpret_cast<ptrdiff_t>(GetCurrentCodeWritePointer()) + displacement);
+    m_emit->lea(GetHostReg64(host_reg), m_emit->dword[m_emit->rip + write_ptr]);
+  }
   else
+  {
     m_emit->mov(GetHostReg64(host_reg), reinterpret_cast<size_t>(ptr));
+  }
 }
 
 CodeCache::DispatcherFunction CodeGenerator::CompileDispatcher()

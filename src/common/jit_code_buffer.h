@@ -5,20 +5,29 @@ class JitCodeBuffer
 {
 public:
   JitCodeBuffer();
-  JitCodeBuffer(u32 size, u32 far_code_size);
+  JitCodeBuffer(u32 size, u32 far_code_size, bool double_mapped = false);
   JitCodeBuffer(void* buffer, u32 size, u32 far_code_size, u32 guard_size);
   ~JitCodeBuffer();
 
   bool Allocate(u32 size = 64 * 1024 * 1024, u32 far_code_size = 0);
+  bool AllocateDoubleMapped(u32 size = 64 * 1024 * 1024, u32 far_code_size = 0);
   bool Initialize(void* buffer, u32 size, u32 far_code_size = 0, u32 guard_size = 0);
   void Destroy();
   void Reset();
 
-  u8* GetFreeCodePointer() const { return m_free_code_ptr; }
+  u8* GetCodeWritePointer() const { return m_code_write_ptr; }
+  u8* GetCodeExecutePointer() const { return m_code_execute_ptr; }
+
+  u8* GetFreeCodeWritePointer() const { return m_code_write_ptr + m_code_used; }
+  u8* GetFreeCodeExecutePointer() const { return m_code_execute_ptr + m_code_used; }
   u32 GetFreeCodeSpace() const { return static_cast<u32>(m_code_size - m_code_used); }
   void CommitCode(u32 length);
 
-  u8* GetFreeFarCodePointer() const { return m_free_far_code_ptr; }
+  u8* GetFarCodeWritePointer() const { return m_far_code_write_ptr; }
+  u8* GetFarCodeExecutePointer() const { return m_far_code_execute_ptr; }
+
+  u8* GetFreeFarCodeWritePointer() const { return m_far_code_write_ptr + m_far_code_used; }
+  u8* GetFreeFarCodeExecutePointer() const { return m_far_code_execute_ptr + m_far_code_used; }
   u32 GetFreeFarCodeSpace() const { return static_cast<u32>(m_far_code_size - m_far_code_used); }
   void CommitFarCode(u32 length);
 
@@ -30,13 +39,16 @@ public:
   static void FlushInstructionCache(void* address, u32 size);
 
 private:
-  u8* m_code_ptr = nullptr;
-  u8* m_free_code_ptr = nullptr;
+  // File mapping used for double-mapping.
+  void* m_file_handle = nullptr;
+
+  u8* m_code_write_ptr = nullptr;
+  u8* m_code_execute_ptr = nullptr;
   u32 m_code_size = 0;
   u32 m_code_used = 0;
 
-  u8* m_far_code_ptr = nullptr;
-  u8* m_free_far_code_ptr = nullptr;
+  u8* m_far_code_write_ptr = nullptr;
+  u8* m_far_code_execute_ptr = nullptr;
   u32 m_far_code_size = 0;
   u32 m_far_code_used = 0;
 

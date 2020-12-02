@@ -25,7 +25,7 @@ public:
   static const char* GetHostRegName(HostReg reg, RegSize size = HostPointerSize);
   static void AlignCodeBuffer(JitCodeBuffer* code_buffer);
 
-  static bool BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi);
+  static bool BackpatchLoadStore(const LoadStoreBackpatchInfo& lbi, JitCodeBuffer* code_buffer);
 
   bool CompileBlock(CodeBlock* block, CodeBlock::HostCodePointer* out_host_code, u32* out_host_code_size);
 
@@ -184,9 +184,12 @@ private:
 
   void SwitchToFarCode();
   void SwitchToNearCode();
-  void* GetCurrentCodePointer() const;
-  void* GetCurrentNearCodePointer() const;
-  void* GetCurrentFarCodePointer() const;
+  void* GetCurrentCodeWritePointer() const;
+  void* GetCurrentNearCodeWritePointer() const;
+  void* GetCurrentFarCodeWritePointer() const;
+  void* GetCurrentCodeExecutePointer() const;
+  void* GetCurrentNearCodeExecutePointer() const;
+  void* GetCurrentFarCodeExecutePointer() const;
 
   //////////////////////////////////////////////////////////////////////////
   // Code Generation Helpers
