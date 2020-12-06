@@ -23,6 +23,9 @@ public:
 #ifdef WIN32
     XInput,
 #endif
+#ifdef WITH_EVDEV
+    Evdev,
+#endif
     Count
   };
 

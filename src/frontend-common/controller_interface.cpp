@@ -90,6 +90,9 @@ static constexpr std::array<const char*, static_cast<u32>(ControllerInterface::B
 #ifdef WIN32
   TRANSLATABLE("ControllerInterface", "XInput"),
 #endif
+#ifdef WITH_EVDEV
+  TRANSLATABLE("ControllerInterface", "Evdev"),
+#endif
 }};
 
 std::optional<ControllerInterface::Backend> ControllerInterface::ParseBackendName(const char* name)
@@ -126,6 +129,9 @@ ControllerInterface::Backend ControllerInterface::GetDefaultBackend()
 #ifdef WIN32
 #include "xinput_controller_interface.h"
 #endif
+#ifdef WITH_EVDEV
+#include "evdev_controller_interface.h"
+#endif
 
 std::unique_ptr<ControllerInterface> ControllerInterface::Create(Backend type)
 {
@@ -136,6 +142,10 @@ std::unique_ptr<ControllerInterface> ControllerInterface::Create(Backend type)
 #ifdef WIN32
   if (type == Backend::XInput)
     return std::make_unique<XInputControllerInterface>();
+#endif
+#ifdef WITH_EVDEV
+  if (type == Backend::Evdev)
+    return std::make_unique<EvdevControllerInterface>();
 #endif
 
   return {};

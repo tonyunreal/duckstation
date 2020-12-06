@@ -90,6 +90,17 @@ if(NOT BUILD_LIBRETRO_CORE)
     endif()
   endif()
 
+  if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+    find_package(LIBEVDEV REQUIRED)
+    target_compile_definitions(frontend-common PUBLIC "-DWITH_EVDEV=1")
+    target_include_directories(frontend-common PRIVATE ${LIBEVDEV_INCLUDE_DIRS})
+    target_link_libraries(frontend-common PRIVATE ${LIBEVDEV_LIBRARIES})
+    target_sources(frontend-common PRIVATE
+      evdev_controller_interface.cpp
+      evdev_controller_interface.h
+    )
+  endif()
+
   if(ENABLE_DISCORD_PRESENCE AND NOT BUILD_LIBRETRO_CORE)
     target_compile_definitions(frontend-common PUBLIC -DWITH_DISCORD_PRESENCE=1)
     target_link_libraries(frontend-common PRIVATE discord-rpc)
