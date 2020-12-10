@@ -284,6 +284,7 @@ protected:
 
   /// Sets the depth test flag for PGXP depth buffering.
   void SetBatchDepthBuffer(bool enabled);
+  void CheckForDepthClear(const BatchVertex* vertices, u32 num_vertices);
 
   HeapArray<u16, VRAM_WIDTH * VRAM_HEIGHT> m_vram_shadow;
 
@@ -292,6 +293,7 @@ protected:
   BatchVertex* m_batch_current_vertex_ptr = nullptr;
   u32 m_batch_base_vertex = 0;
   s32 m_current_depth = 0;
+  float m_last_depth_z = 0.0f;
 
   u32 m_resolution_scale = 1;
   u32 m_multisamples = 1;

@@ -220,9 +220,6 @@ void WriteRegister(u32 index, u32 value)
     case 61: // ZSF3
     case 62: // ZSF4
     {
-      if (index == 58 && REGS.r32[index] != SignExtend32(Truncate16(value)))
-        g_gpu->UpdateDepthBufferFromMaskBit();
-
       // sign-extend z component of vector registers
       REGS.r32[index] = SignExtend32(Truncate16(value));
     }

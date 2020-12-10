@@ -124,7 +124,8 @@ void GPU_HW::UpdateHWSettings(bool* framebuffer_changed, bool* shaders_changed)
     (m_resolution_scale != resolution_scale || m_multisamples != multisamples ||
      m_true_color != g_settings.gpu_true_color || m_per_sample_shading != per_sample_shading ||
      m_scaled_dithering != g_settings.gpu_scaled_dithering || m_texture_filtering != g_settings.gpu_texture_filter ||
-     m_using_uv_limits != use_uv_limits || m_chroma_smoothing != g_settings.gpu_24bit_chroma_smoothing || m_pgxp_depth_buffer != g_settings.gpu_pgxp_depth_buffer);
+     m_using_uv_limits != use_uv_limits || m_chroma_smoothing != g_settings.gpu_24bit_chroma_smoothing ||
+     m_pgxp_depth_buffer != g_settings.gpu_pgxp_depth_buffer);
 
   if (m_resolution_scale != resolution_scale)
   {
@@ -335,6 +336,21 @@ void GPU_HW::SetBatchDepthBuffer(bool enabled)
   }
 
   m_batch.use_depth_buffer = enabled;
+  m_last_depth_z = -1.0f;
+}
+
+void GPU_HW::CheckForDepthClear(const BatchVertex* vertices, u32 num_vertices)
+{
+  float average_z = vertices[0].w;
+  for (u32 i = 1; i < num_vertices; i++)
+    average_z += vertices[i].w;
+  average_z /= static_cast<float>(num_vertices);
+
+  static constexpr float THRESHOLD = 200.0f / 4096.0f;
+  if (m_last_depth_z >= 0.0f && (average_z - m_last_depth_z) >= THRESHOLD)
+    UpdateDepthBufferFromMaskBit();
+
+  m_last_depth_z = average_z;
 }
 
 void GPU_HW::DrawLine(float x0, float y0, u32 col0, float x1, float y1, u32 col1, float depth)
@@ -472,12 +488,16 @@ void GPU_HW::LoadVertices()
       }
       if (pgxp)
       {
-        SetBatchDepthBuffer(g_settings.gpu_pgxp_depth_buffer && valid_w);
         if (!valid_w)
         {
           SetBatchDepthBuffer(false);
           for (BatchVertex& v : vertices)
             v.w = 1.0f;
+        }
+        else if (g_settings.gpu_pgxp_depth_buffer)
+        {
+          SetBatchDepthBuffer(true);
+          CheckForDepthClear(vertices.data(), num_vertices);
         }
       }
 
