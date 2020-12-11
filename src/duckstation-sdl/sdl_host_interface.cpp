@@ -1609,6 +1609,16 @@ void SDLHostInterface::DrawSettingsWindow()
         settings_changed |=
           ImGui::MenuItem("PGXP Preserve Projection Precision", nullptr, &m_settings_copy.gpu_pgxp_enable);
         settings_changed |= ImGui::Checkbox("PGXP Depth Buffer", &m_settings_copy.gpu_pgxp_depth_buffer);
+
+        ImGui::Text("PGXP Depth Clear Threshold:");
+        ImGui::SameLine(indent);
+
+        float depth_clear_threshold = m_settings_copy.GetPGXPDepthClearThreshold();
+        if (ImGui::SliderFloat("##clear_threshold", &depth_clear_threshold, 0.0f, 4096.0f))
+        {
+          m_settings_copy.SetPGXPDepthClearThreshold(depth_clear_threshold);
+          settings_changed = true;
+        }
       }
 
       ImGui::EndTabItem();

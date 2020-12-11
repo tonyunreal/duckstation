@@ -1322,20 +1322,15 @@ std::string GPU_HW_ShaderGen::GenerateVRAMUpdateDepthFragmentShader()
   std::stringstream ss;
   WriteHeader(ss);
   WriteCommonFunctions(ss);
-  DefineMacro(ss, "PGXP_DEPTH", m_pgxp_depth);
   DeclareTexture(ss, "samp0", 0, UsingMSAA());
   DeclareFragmentEntryPoint(ss, 0, 1, {}, true, 0, true, false, false, UsingMSAA());
 
   ss << R"(
 {
-#if !PGXP_DEPTH
-  #if MULTISAMPLING
-    o_depth = LOAD_TEXTURE_MS(samp0, int2(v_pos.xy), f_sample_index).a;
-  #else
-    o_depth = LOAD_TEXTURE(samp0, int2(v_pos.xy), 0).a;
-  #endif
+#if MULTISAMPLING
+  o_depth = LOAD_TEXTURE_MS(samp0, int2(v_pos.xy), f_sample_index).a;
 #else
-  o_depth = 1.0f;
+  o_depth = LOAD_TEXTURE(samp0, int2(v_pos.xy), 0).a;
 #endif
 }
 )";

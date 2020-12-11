@@ -311,11 +311,14 @@ bool GPU_HW_OpenGL::CreateFramebuffer()
 
 void GPU_HW_OpenGL::ClearFramebuffer()
 {
+  const float depth_clear_value = m_pgxp_depth_buffer ? 1.0f : 0.0f;
+
   glDisable(GL_SCISSOR_TEST);
   glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  IsGLES() ? glClearDepthf(0.0f) : glClearDepth(0.0f);
+  IsGLES() ? glClearDepthf(depth_clear_value) : glClearDepth(depth_clear_value);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_SCISSOR_TEST);
+  m_last_depth_z = 1.0f;
   SetFullVRAMDirtyRectangle();
 }
 
@@ -1056,6 +1059,9 @@ void GPU_HW_OpenGL::UpdateVRAMReadTexture()
 
 void GPU_HW_OpenGL::UpdateDepthBufferFromMaskBit()
 {
+  if (m_pgxp_depth_buffer)
+    return;
+
   glDisable(GL_SCISSOR_TEST);
   glDisable(GL_BLEND);
   glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -1071,6 +1077,15 @@ void GPU_HW_OpenGL::UpdateDepthBufferFromMaskBit()
   glEnable(GL_SCISSOR_TEST);
 
   m_vram_read_texture.Bind();
+}
+
+void GPU_HW_OpenGL::ClearDepthBuffer()
+{
+  glDisable(GL_SCISSOR_TEST);
+  IsGLES() ? glClearDepthf(1.0f) : glClearDepth(1.0f);
+  glClear(GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_SCISSOR_TEST);
+  m_last_depth_z = 1.0f;
 }
 
 std::unique_ptr<GPU> GPU::CreateHardwareOpenGLRenderer()

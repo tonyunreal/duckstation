@@ -163,8 +163,14 @@ void GPU_HW::UpdateHWSettings(bool* framebuffer_changed, bool* shaders_changed)
   if (!m_supports_dual_source_blend && TextureFilterRequiresDualSourceBlend(m_texture_filtering))
     m_texture_filtering = GPUTextureFilter::Nearest;
 
-  m_pgxp_depth_buffer = g_settings.gpu_pgxp_depth_buffer;
-  m_batch.use_depth_buffer = false;
+  if (m_pgxp_depth_buffer != g_settings.gpu_pgxp_depth_buffer)
+  {
+    m_pgxp_depth_buffer = g_settings.gpu_pgxp_depth_buffer;
+    m_batch.use_depth_buffer = false;
+    if (m_pgxp_depth_buffer)
+      ClearDepthBuffer();
+  }
+
   PrintSettingsToLog();
 }
 
@@ -206,6 +212,7 @@ void GPU_HW::PrintSettingsToLog()
   Log_InfoPrintf("Texture Filtering: %s", Settings::GetTextureFilterDisplayName(m_texture_filtering));
   Log_InfoPrintf("Dual-source blending: %s", m_supports_dual_source_blend ? "Supported" : "Not supported");
   Log_InfoPrintf("Using UV limits: %s", m_using_uv_limits ? "YES" : "NO");
+  Log_InfoPrintf("Depth buffer: %s", m_pgxp_depth_buffer ? "YES" : "NO");
 }
 
 void GPU_HW::UpdateVRAMReadTexture()
@@ -336,19 +343,28 @@ void GPU_HW::SetBatchDepthBuffer(bool enabled)
   }
 
   m_batch.use_depth_buffer = enabled;
-  m_last_depth_z = -1.0f;
+  m_last_depth_z = 1.0f;
 }
 
 void GPU_HW::CheckForDepthClear(const BatchVertex* vertices, u32 num_vertices)
 {
-  float average_z = vertices[0].w;
-  for (u32 i = 1; i < num_vertices; i++)
-    average_z += vertices[i].w;
-  average_z /= static_cast<float>(num_vertices);
+  DebugAssert(num_vertices == 3 || num_vertices == 4);
+  float average_z;
+  if (num_vertices == 3)
+    average_z = std::min((vertices[0].w + vertices[1].w + vertices[2].w) / 3.0f, 1.0f);
+  else
+    average_z = std::min((vertices[0].w + vertices[1].w + vertices[2].w + vertices[3].w) / 4.0f, 1.0f);
 
-  static constexpr float THRESHOLD = 200.0f / 4096.0f;
-  if (m_last_depth_z >= 0.0f && (average_z - m_last_depth_z) >= THRESHOLD)
-    UpdateDepthBufferFromMaskBit();
+  if ((average_z - m_last_depth_z) >= g_settings.gpu_pgxp_depth_clear_threshold)
+  {
+    if (GetBatchVertexCount() > 0)
+    {
+      FlushRender();
+      EnsureVertexBufferSpaceForCurrentCommand();
+    }
+
+    ClearDepthBuffer();
+  }
 
   m_last_depth_z = average_z;
 }
@@ -1075,6 +1091,9 @@ void GPU_HW::FlushRender()
   {
     m_drawing_area_changed = false;
     SetScissorFromDrawingArea();
+
+    if (m_pgxp_depth_buffer && m_last_depth_z < 1.0f)
+      ClearDepthBuffer();
   }
 
   if (m_batch_ubo_dirty)

@@ -30,6 +30,7 @@ protected:
   void CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height) override;
   void UpdateVRAMReadTexture() override;
   void UpdateDepthBufferFromMaskBit() override;
+  void ClearDepthBuffer() override;
   void SetScissorFromDrawingArea() override;
   void MapBatchVertexPointer(u32 required_vertices) override;
   void UnmapBatchVertexPointer(u32 used_vertices) override;

@@ -29,6 +29,7 @@ EnhancementSettingsWidget::EnhancementSettingsWidget(QtHostInterface* host_inter
   SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.pgxpCulling, "GPU", "PGXPCulling", true);
   SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.pgxpTextureCorrection, "GPU",
                                                "PGXPTextureCorrection", true);
+  SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.pgxpDepthBuffer, "GPU", "PGXPDepthBuffer", true);
 
   connect(m_ui.resolutionScale, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           &EnhancementSettingsWidget::updateScaledDitheringEnabled);

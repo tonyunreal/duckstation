@@ -150,6 +150,13 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QCheckBox" name="pgxpDepthBuffer">
+        <property name="text">
+         <string>Depth Buffer</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

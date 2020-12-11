@@ -180,6 +180,7 @@ protected:
 
   virtual void UpdateVRAMReadTexture();
   virtual void UpdateDepthBufferFromMaskBit() = 0;
+  virtual void ClearDepthBuffer() = 0;
   virtual void SetScissorFromDrawingArea() = 0;
   virtual void MapBatchVertexPointer(u32 required_vertices) = 0;
   virtual void UnmapBatchVertexPointer(u32 used_vertices) = 0;
@@ -293,7 +294,7 @@ protected:
   BatchVertex* m_batch_current_vertex_ptr = nullptr;
   u32 m_batch_base_vertex = 0;
   s32 m_current_depth = 0;
-  float m_last_depth_z = 0.0f;
+  float m_last_depth_z = 1.0f;
 
   u32 m_resolution_scale = 1;
   u32 m_multisamples = 1;

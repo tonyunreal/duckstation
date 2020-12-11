@@ -506,8 +506,8 @@ void GPU_HW_Vulkan::ClearFramebuffer()
   m_vram_depth_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
   static constexpr VkClearColorValue cc = {};
+  const VkClearDepthStencilValue cds = {m_pgxp_depth_buffer ? 1.0f : 0.0f};
   static constexpr VkImageSubresourceRange csrr = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
-  static constexpr VkClearDepthStencilValue cds = {};
   static constexpr VkImageSubresourceRange dsrr = {VK_IMAGE_ASPECT_DEPTH_BIT, 0u, 1u, 0u, 1u};
   vkCmdClearColorImage(cmdbuf, m_vram_texture.GetImage(), m_vram_texture.GetLayout(), &cc, 1u, &csrr);
   vkCmdClearDepthStencilImage(cmdbuf, m_vram_depth_texture.GetImage(), m_vram_depth_texture.GetLayout(), &cds, 1u,
@@ -515,6 +515,7 @@ void GPU_HW_Vulkan::ClearFramebuffer()
 
   m_vram_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   m_vram_depth_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+  m_last_depth_z = 1.0f;
 
   SetFullVRAMDirtyRectangle();
 }
@@ -1283,6 +1284,9 @@ void GPU_HW_Vulkan::UpdateVRAMReadTexture()
 
 void GPU_HW_Vulkan::UpdateDepthBufferFromMaskBit()
 {
+  if (m_pgxp_depth_buffer)
+    return;
+
   EndRenderPass();
 
   VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
@@ -1302,6 +1306,25 @@ void GPU_HW_Vulkan::UpdateDepthBufferFromMaskBit()
   m_vram_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
   RestoreGraphicsAPIState();
+}
+
+void GPU_HW_Vulkan::ClearDepthBuffer()
+{
+  EndRenderPass();
+
+  VkCommandBuffer cmdbuf = g_vulkan_context->GetCurrentCommandBuffer();
+  m_vram_depth_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+  static constexpr VkClearColorValue cc = {};
+  const VkClearDepthStencilValue cds = {1.0f};
+  static constexpr VkImageSubresourceRange csrr = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+  static constexpr VkImageSubresourceRange dsrr = {VK_IMAGE_ASPECT_DEPTH_BIT, 0u, 1u, 0u, 1u};
+  vkCmdClearColorImage(cmdbuf, m_vram_texture.GetImage(), m_vram_texture.GetLayout(), &cc, 1u, &csrr);
+  vkCmdClearDepthStencilImage(cmdbuf, m_vram_depth_texture.GetImage(), m_vram_depth_texture.GetLayout(), &cds, 1u,
+                              &dsrr);
+
+  m_vram_depth_texture.TransitionToLayout(cmdbuf, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+  m_last_depth_z = 1.0f;
 }
 
 std::unique_ptr<GPU> GPU::CreateHardwareVulkanRenderer()

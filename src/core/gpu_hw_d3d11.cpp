@@ -202,7 +202,7 @@ bool GPU_HW_D3D11::CreateFramebuffer()
   const u32 texture_height = VRAM_HEIGHT * m_resolution_scale;
   const u32 multisamples = m_multisamples;
   const DXGI_FORMAT texture_format = DXGI_FORMAT_R8G8B8A8_UNORM;
-  const DXGI_FORMAT depth_format = DXGI_FORMAT_D32_FLOAT;
+  const DXGI_FORMAT depth_format = DXGI_FORMAT_D16_UNORM;
 
   if (!m_vram_texture.Create(m_device.Get(), texture_width, texture_height, multisamples, texture_format,
                              D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) ||
@@ -235,9 +235,10 @@ void GPU_HW_D3D11::ClearFramebuffer()
 {
   static constexpr std::array<float, 4> color = {};
   m_context->ClearRenderTargetView(m_vram_texture.GetD3DRTV(), color.data());
-  m_context->ClearDepthStencilView(m_vram_depth_view.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+  m_context->ClearDepthStencilView(m_vram_depth_view.Get(), D3D11_CLEAR_DEPTH, m_pgxp_depth_buffer ? 1.0f : 0.0f, 0);
   m_context->ClearRenderTargetView(m_display_texture, color.data());
   SetFullVRAMDirtyRectangle();
+  m_last_depth_z = 1.0f;
 }
 
 void GPU_HW_D3D11::DestroyFramebuffer()
@@ -287,7 +288,7 @@ bool GPU_HW_D3D11::CreateStateObjects()
   rs_desc.CullMode = D3D11_CULL_NONE;
   rs_desc.ScissorEnable = TRUE;
   rs_desc.MultisampleEnable = IsUsingMultisampling();
-  rs_desc.DepthClipEnable = !m_pgxp_depth_buffer;
+  rs_desc.DepthClipEnable = FALSE;
   hr = m_device->CreateRasterizerState(&rs_desc, m_cull_none_rasterizer_state.ReleaseAndGetAddressOf());
   if (FAILED(hr))
     return false;
@@ -894,6 +895,9 @@ void GPU_HW_D3D11::UpdateVRAMReadTexture()
 
 void GPU_HW_D3D11::UpdateDepthBufferFromMaskBit()
 {
+  if (m_pgxp_depth_buffer)
+    return;
+
   SetViewportAndScissor(0, 0, m_vram_texture.GetWidth(), m_vram_texture.GetHeight());
 
   m_context->OMSetRenderTargets(0, nullptr, m_vram_depth_view.Get());
@@ -905,6 +909,14 @@ void GPU_HW_D3D11::UpdateDepthBufferFromMaskBit()
 
   m_context->PSSetShaderResources(0, 1, m_vram_read_texture.GetD3DSRVArray());
   RestoreGraphicsAPIState();
+}
+
+void GPU_HW_D3D11::ClearDepthBuffer()
+{
+  DebugAssert(m_pgxp_depth_buffer);
+
+  m_context->ClearDepthStencilView(m_vram_depth_view.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+  m_last_depth_z = 1.0f;
 }
 
 std::unique_ptr<GPU> GPU::CreateHardwareD3D11Renderer()

@@ -130,6 +130,7 @@ struct Settings
   bool video_sync_enabled = true;
   float display_max_fps = 0.0f;
   float gpu_pgxp_tolerance = -1.0f;
+  float gpu_pgxp_depth_clear_threshold = 200.0f / 4096.0f;
 
   bool cdrom_read_thread = true;
   bool cdrom_region_check = true;
@@ -193,6 +194,9 @@ struct Settings
   {
     return gpu_pgxp_enable ? (gpu_pgxp_cpu ? PGXPMode::CPU : PGXPMode::Memory) : PGXPMode::Disabled;
   }
+
+  ALWAYS_INLINE float GetPGXPDepthClearThreshold() const { return gpu_pgxp_depth_clear_threshold * 4096.0f; }
+  ALWAYS_INLINE void SetPGXPDepthClearThreshold(float value) { gpu_pgxp_depth_clear_threshold = value / 4096.0f; }
 
   ALWAYS_INLINE bool IsUsingFastmem() const
   {
