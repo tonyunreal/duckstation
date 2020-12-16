@@ -672,7 +672,12 @@ std::optional<PhysicalMemoryAddress> SearchMemory(PhysicalMemoryAddress start_ad
       }
     }
 
-    current_region = static_cast<MemoryRegion>(static_cast<int>(current_region) + 1);
+    // skip RAM mirrors
+    if (current_region == MemoryRegion::RAM)
+      current_region = MemoryRegion::EXP1;
+    else
+      current_region = static_cast<MemoryRegion>(static_cast<int>(current_region) + 1);
+
     if (current_region != MemoryRegion::Count)
       current_address = GetMemoryRegionStart(current_region);
   }
