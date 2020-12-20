@@ -814,7 +814,8 @@ void GPU_HW_D3D11::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* d
 
   const VRAMWriteUBOData uniforms =
     GetVRAMWriteUBOData(x, y, width, height, map_result.index_aligned, set_mask, check_mask);
-  m_context->OMSetDepthStencilState((check_mask && && !m_batch.use_depth_buffer) ? m_depth_test_greater_state.Get() : m_depth_test_always_state.Get(), 0);
+  m_context->OMSetDepthStencilState(
+    (check_mask && !m_batch.use_depth_buffer) ? m_depth_test_greater_state.Get() : m_depth_test_always_state.Get(), 0);
   m_context->PSSetShaderResources(0, 1, m_texture_stream_buffer_srv_r16ui.GetAddressOf());
 
   // the viewport should already be set to the full vram, so just adjust the scissor
