@@ -32,6 +32,8 @@ if(NOT BUILD_LIBRETRO_CORE)
     target_sources(frontend-common PRIVATE
       imgui_impl_dx11.h
       imgui_impl_dx11.cpp
+      imgui_impl_dx12.h
+      imgui_impl_dx12.cpp
     )
   endif()
 
