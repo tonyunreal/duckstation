@@ -4,6 +4,7 @@
 #include "gpu.h"
 #include "interrupt_controller.h"
 #include "system.h"
+#include "texture_replacements.h"
 Log_SetChannel(GPU);
 
 #define CHECK_COMMAND_SIZE(num_words)                                                                                  \
@@ -511,6 +512,12 @@ void GPU::FinishVRAMWrite()
 
   if (m_blit_remaining_words == 0)
   {
+    if (g_settings.texture_replacements.ShouldDumpVRAMWrite(m_vram_transfer.width, m_vram_transfer.height))
+    {
+      g_texture_replacements.DumpVRAMWrite(m_vram_transfer.width, m_vram_transfer.height,
+                                           reinterpret_cast<const u16*>(m_blit_buffer.data()));
+    }
+
     UpdateVRAM(m_vram_transfer.x, m_vram_transfer.y, m_vram_transfer.width, m_vram_transfer.height,
                m_blit_buffer.data(), m_GPUSTAT.set_mask_while_drawing, m_GPUSTAT.check_mask_before_draw);
   }
