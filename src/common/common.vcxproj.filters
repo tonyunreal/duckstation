@@ -200,6 +200,7 @@
     <ClCompile Include="shiftjis.cpp" />
     <ClCompile Include="memory_arena.cpp" />
     <ClCompile Include="page_fault_handler.cpp" />
+    <ClCompile Include="cd_image_ppf.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="bitfield.natvis" />

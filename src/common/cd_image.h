@@ -131,6 +131,12 @@ public:
       BitField<u8, bool, 5, 1> digital_copy_permitted;
       BitField<u8, bool, 6, 1> data;
       BitField<u8, bool, 7, 1> four_channel_audio;
+
+      Control& operator=(const Control& c)
+      {
+        bits = c.bits;
+        return *this;
+      }
     };
 
     struct
@@ -191,10 +197,11 @@ public:
   static u32 GetBytesPerSector(TrackMode mode);
 
   // Opening disc image.
-  static std::unique_ptr<CDImage> Open(const char* filename);
+  static std::unique_ptr<CDImage> Open(const char* filename, bool search_for_patches = true);
   static std::unique_ptr<CDImage> OpenBinImage(const char* filename);
   static std::unique_ptr<CDImage> OpenCueSheetImage(const char* filename);
   static std::unique_ptr<CDImage> OpenCHDImage(const char* filename);
+  static std::unique_ptr<CDImage> OverlayPPFPatch(const char* filename, std::unique_ptr<CDImage> parent_image);
   static std::unique_ptr<CDImage>
   CreateMemoryImage(CDImage* image, ProgressCallback* progress = ProgressCallback::NullProgressCallback);
 
@@ -218,6 +225,8 @@ public:
   u32 GetFirstTrackNumber() const { return m_tracks.front().track_number; }
   u32 GetLastTrackNumber() const { return m_tracks.back().track_number; }
   u32 GetIndexCount() const { return static_cast<u32>(m_indices.size()); }
+  const std::vector<Track>& GetTracks() const { return m_tracks; }
+  const std::vector<Index>& GetIndices() const { return m_indices; }
   const Track& GetTrack(u32 track) const;
   const Index& GetIndex(u32 i) const;
 

@@ -128,6 +128,7 @@
     <ClCompile Include="cd_image_cue.cpp" />
     <ClCompile Include="cd_image_hasher.cpp" />
     <ClCompile Include="cd_image_memory.cpp" />
+    <ClCompile Include="cd_image_ppf.cpp" />
     <ClCompile Include="d3d11\shader_cache.cpp" />
     <ClCompile Include="d3d11\shader_compiler.cpp" />
     <ClCompile Include="d3d11\staging_texture.cpp" />

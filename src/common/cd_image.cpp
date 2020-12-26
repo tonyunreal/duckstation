@@ -1,5 +1,6 @@
 #include "cd_image.h"
 #include "assert.h"
+#include "file_system.h"
 #include "log.h"
 #include <array>
 Log_SetChannel(CDImage);
@@ -14,7 +15,7 @@ u32 CDImage::GetBytesPerSector(TrackMode mode)
   return sizes[static_cast<u32>(mode)];
 }
 
-std::unique_ptr<CDImage> CDImage::Open(const char* filename)
+std::unique_ptr<CDImage> CDImage::Open(const char* filename, bool search_for_patches /* = true */)
 {
   const char* extension = std::strrchr(filename, '.');
   if (!extension)
@@ -29,24 +30,46 @@ std::unique_ptr<CDImage> CDImage::Open(const char* filename)
 #define CASE_COMPARE strcasecmp
 #endif
 
+  std::unique_ptr<CDImage> image;
+
   if (CASE_COMPARE(extension, ".cue") == 0)
   {
-    return OpenCueSheetImage(filename);
+    image = OpenCueSheetImage(filename);
   }
   else if (CASE_COMPARE(extension, ".bin") == 0 || CASE_COMPARE(extension, ".img") == 0 ||
            CASE_COMPARE(extension, ".iso") == 0)
   {
-    return OpenBinImage(filename);
+    image = OpenBinImage(filename);
   }
   else if (CASE_COMPARE(extension, ".chd") == 0)
   {
-    return OpenCHDImage(filename);
+    image = OpenCHDImage(filename);
+  }
+  else
+  {
+    Log_ErrorPrintf("Unknown extension '%s' from filename '%s'", extension, filename);
+    return nullptr;
   }
 
 #undef CASE_COMPARE
 
-  Log_ErrorPrintf("Unknown extension '%s' from filename '%s'", extension, filename);
-  return nullptr;
+  if (search_for_patches)
+  {
+    {
+      const std::string ppf_filename(FileSystem::ReplaceExtension(filename, "ppf"));
+      if (FileSystem::FileExists(ppf_filename.c_str()))
+      {
+        image = OverlayPPFPatch(ppf_filename.c_str(), std::move(image));
+        if (!image)
+        {
+          Log_WarningPrintf("Failed to apply ppf patch from '%s', trying unpatched image", ppf_filename.c_str());
+          return Open(filename, false);
+        }
+      }
+    }
+  }
+
+  return image;
 }
 
 CDImage::LBA CDImage::GetTrackStartPosition(u8 track) const
