@@ -1628,7 +1628,7 @@ bool DumpRAM(const char* filename)
   if (!fp)
     return false;
 
-  return std::fwrite(Bus::g_ram, Bus::RAM_SIZE, 1, fp.get()) == 1;
+  return std::fwrite(Bus::g_ram, Bus::g_ram_size, 1, fp.get()) == 1;
 }
 
 bool HasMedia()

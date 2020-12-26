@@ -429,7 +429,7 @@ size_t LibretroHostInterface::retro_get_memory_size(unsigned id)
   switch (id)
   {
     case RETRO_MEMORY_SYSTEM_RAM:
-      return Bus::RAM_SIZE;
+      return Bus::g_ram_size;
 
     default:
       return 0;

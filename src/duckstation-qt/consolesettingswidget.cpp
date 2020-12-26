@@ -25,6 +25,7 @@ ConsoleSettingsWidget::ConsoleSettingsWidget(QtHostInterface* host_interface, QW
   SettingWidgetBinder::BindWidgetToEnumSetting(m_host_interface, m_ui.region, "Console", "Region",
                                                &Settings::ParseConsoleRegionName, &Settings::GetConsoleRegionName,
                                                Settings::DEFAULT_CONSOLE_REGION);
+  SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.enable8MBRAM, "Console", "Enable8MBRAM", false);
   SettingWidgetBinder::BindWidgetToEnumSetting(m_host_interface, m_ui.cpuExecutionMode, "CPU", "ExecutionMode",
                                                &Settings::ParseCPUExecutionMode, &Settings::GetCPUExecutionModeName,
                                                Settings::DEFAULT_CPU_EXECUTION_MODE);
@@ -35,6 +36,11 @@ ConsoleSettingsWidget::ConsoleSettingsWidget(QtHostInterface* host_interface, QW
   SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.cdromLoadImageToRAM, "CDROM", "LoadImageToRAM",
                                                false);
 
+  dialog->registerWidgetHelp(
+    m_ui.enable8MBRAM, tr("Enable 8MB RAM (Dev Console)"), tr("Unchecked"),
+    tr("Enables an additional 6MB of RAM, usually present on dev consoles. Games have to use a larger heap size for "
+       "this additional RAM to be usable, and may break games which rely on memory mirrors, so it should only be used "
+       "with compatible mods."));
   dialog->registerWidgetHelp(
     m_ui.cdromLoadImageToRAM, tr("Preload Image to RAM"), tr("Unchecked"),
     tr("Loads the game image into RAM. Useful for network paths that may become unreliable during gameplay. In some "
