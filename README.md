@@ -60,7 +60,6 @@ Other features include:
  - Namco GunCon lightgun support (simulated with mouse)
  - NeGcon support
  - Qt and SDL frontends for desktop
- - libretro core for Windows and Linux
  - Automatic updates for Windows builds
  - Automatic content scanning - game titles/regions are provided by redump.org
  - Optional automatic switching of memory cards for each game
@@ -263,7 +262,9 @@ Hotkeys:
  
 ## Libretro Core
 
-DuckStation is available as a libretro core, which can be loaded into a frontend such as RetroArch. It supports most features of the full frontend, within the constraints and limitations of being a libretro core.
+DuckStation is available as a libretro core, supporting most of the features of the full frontend within the constraints and limitations of being a libretro core.
+
+As of December 2020, the libretro core is no longer supported by the developer. The builds are provided here as a courtesy, but any bugs must be tested in the standalone version prior to being reported.
 
 Prebuilt binaries for 64-bit Windows, Linux and Android can be found on the releases page. Direct links:
 - 64-bit Windows: https://github.com/stenzek/duckstation/releases/download/latest/duckstation_libretro.dll.zip
