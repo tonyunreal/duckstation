@@ -334,8 +334,10 @@ private:
   u16 ReadVoiceRegister(u32 offset);
   void WriteVoiceRegister(u32 offset, u16 value);
 
+  ALWAYS_INLINE bool IsRAMIRQTriggerable() const { return m_SPUCNT.irq9_enable; }
   void CheckRAMIRQ(u32 address);
   void CheckForLateRAMIRQs();
+
   void WriteToCaptureBuffer(u32 index, s16 value);
   void IncrementCaptureBufferPosition();
 

@@ -438,7 +438,7 @@ void SPU::WriteRegister(u32 offset, u16 value)
       m_tick_event->InvokeEarly();
       m_irq_address = value;
 
-      if (m_SPUCNT.irq9_enable)
+      if (IsRAMIRQTriggerable())
         CheckForLateRAMIRQs();
 
       return;
@@ -449,7 +449,8 @@ void SPU::WriteRegister(u32 offset, u16 value)
       Log_DebugPrintf("SPU transfer address register <- 0x%04X", ZeroExtend32(value));
       m_transfer_address_reg = value;
       m_transfer_address = ZeroExtend32(value) * 8;
-      CheckRAMIRQ(m_transfer_address);
+      if (IsRAMIRQTriggerable())
+        CheckRAMIRQ(m_transfer_address);
       return;
     }
 
@@ -494,7 +495,7 @@ void SPU::WriteRegister(u32 offset, u16 value)
 
       if (!m_SPUCNT.irq9_enable)
         m_SPUSTAT.irq9_flag = false;
-      else if (!m_SPUSTAT.irq9_flag)
+      else if (IsRAMIRQTriggerable())
         CheckForLateRAMIRQs();
 
       UpdateEventInterval();
@@ -687,11 +688,10 @@ void SPU::WriteVoiceRegister(u32 offset, u16 value)
 
 void SPU::CheckRAMIRQ(u32 address)
 {
-  if (!m_SPUCNT.irq9_enable)
-    return;
-
-  if (ZeroExtend32(m_irq_address) * 8 == address)
+  if (ZeroExtend32(m_irq_address) == (address / 8))
   {
+    DebugAssert(IsRAMIRQTriggerable());
+
     Log_DebugPrintf("SPU IRQ at address 0x%08X", address);
     m_SPUSTAT.irq9_flag = true;
     g_interrupt_controller.InterruptRequest(InterruptController::IRQ::SPU);
@@ -700,7 +700,9 @@ void SPU::CheckRAMIRQ(u32 address)
 
 void SPU::CheckForLateRAMIRQs()
 {
-  for (u32 i = 0; i < NUM_VOICES && !m_SPUSTAT.irq9_flag; i++)
+  CheckRAMIRQ(m_transfer_address);
+
+  for (u32 i = 0; i < NUM_VOICES && !IsRAMIRQTriggerable(); i++)
   {
     // we skip voices which haven't started this block yet - because they'll check
     // the next time they're sampled, and the delay might be important.
@@ -718,7 +720,8 @@ void SPU::WriteToCaptureBuffer(u32 index, s16 value)
   const u32 ram_address = (index * CAPTURE_BUFFER_SIZE_PER_CHANNEL) | ZeroExtend16(m_capture_buffer_position);
   // Log_DebugPrintf("write to capture buffer %u (0x%08X) <- 0x%04X", index, ram_address, u16(value));
   std::memcpy(&m_ram[ram_address], &value, sizeof(value));
-  CheckRAMIRQ(ram_address);
+  if (IsRAMIRQTriggerable())
+    CheckRAMIRQ(ram_address);
 }
 
 void SPU::IncrementCaptureBufferPosition()
@@ -744,6 +747,9 @@ void SPU::ExecuteTransfer(TickCount ticks)
         m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
         m_transfer_fifo.Push(value);
         ticks -= TRANSFER_TICKS_PER_HALFWORD;
+
+        if (IsRAMIRQTriggerable())
+          CheckRAMIRQ(m_transfer_address);
       }
 
       // this can result in the FIFO being emptied, hence double the while loop
@@ -774,6 +780,9 @@ void SPU::ExecuteTransfer(TickCount ticks)
         std::memcpy(&m_ram[m_transfer_address], &value, sizeof(u16));
         m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
         ticks -= TRANSFER_TICKS_PER_HALFWORD;
+
+        if (IsRAMIRQTriggerable())
+          CheckRAMIRQ(m_transfer_address);
       }
 
       // similar deal here, the FIFO can be written out in a long slice
@@ -1322,8 +1331,11 @@ s32 SPU::Voice::Interpolate() const
 void SPU::ReadADPCMBlock(u16 address, ADPCMBlock* block)
 {
   u32 ram_address = (ZeroExtend32(address) * 8) & RAM_MASK;
-  CheckRAMIRQ(ram_address);
-  CheckRAMIRQ((ram_address + 8) & RAM_MASK);
+  if (IsRAMIRQTriggerable())
+  {
+    CheckRAMIRQ(ram_address);
+    CheckRAMIRQ((ram_address + 8) & RAM_MASK);
+  }
 
   // fast path - no wrap-around
   if ((ram_address + sizeof(ADPCMBlock)) <= RAM_SIZE)
