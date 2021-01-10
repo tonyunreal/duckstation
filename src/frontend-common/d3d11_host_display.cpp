@@ -370,21 +370,11 @@ bool D3D11HostDisplay::InitializeRenderDevice(std::string_view shader_cache_dire
   if (!CreateResources())
     return false;
 
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext() && !CreateImGuiContext())
-    return false;
-#endif
-
   return true;
 }
 
 void D3D11HostDisplay::DestroyRenderDevice()
 {
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext())
-    DestroyImGuiContext();
-#endif
-
   DestroyResources();
   DestroyRenderSurface();
   m_context.Reset();
@@ -684,9 +674,6 @@ void D3D11HostDisplay::DestroyResources()
 bool D3D11HostDisplay::CreateImGuiContext()
 {
 #ifdef WITH_IMGUI
-  ImGui::GetIO().DisplaySize.x = static_cast<float>(m_window_info.surface_width);
-  ImGui::GetIO().DisplaySize.y = static_cast<float>(m_window_info.surface_height);
-
   if (!ImGui_ImplDX11_Init(m_device.Get(), m_context.Get()))
     return false;
 
@@ -700,6 +687,14 @@ void D3D11HostDisplay::DestroyImGuiContext()
 #ifdef WITH_IMGUI
   ImGui_ImplDX11_Shutdown();
 #endif
+}
+
+bool D3D11HostDisplay::UpdateImGuiFontTexture()
+{
+#ifdef WITH_IMGUI
+  ImGui_ImplDX11_CreateFontsTexture();
+#endif
+  return true;
 }
 
 bool D3D11HostDisplay::Render()

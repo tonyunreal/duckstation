@@ -261,7 +261,7 @@ void ImGui_ImplDX11_RenderDrawData(ImDrawData* draw_data)
     ctx->IASetInputLayout(old.InputLayout); if (old.InputLayout) old.InputLayout->Release();
 }
 
-static void ImGui_ImplDX11_CreateFontsTexture()
+void ImGui_ImplDX11_CreateFontsTexture()
 {
     // Build texture atlas
     ImGuiIO& io = ImGui::GetIO();
@@ -270,6 +270,11 @@ static void ImGui_ImplDX11_CreateFontsTexture()
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
 
     // Upload texture to graphics system
+    if (g_pFontTextureView)
+    {
+        g_pFontTextureView->Release();
+        g_pFontTextureView = nullptr;
+    }
     {
         D3D11_TEXTURE2D_DESC desc;
         ZeroMemory(&desc, sizeof(desc));
@@ -305,6 +310,7 @@ static void ImGui_ImplDX11_CreateFontsTexture()
     io.Fonts->TexID = (ImTextureID)g_pFontTextureView;
 
     // Create texture sampler
+    if (!g_pFontSampler)
     {
         D3D11_SAMPLER_DESC desc;
         ZeroMemory(&desc, sizeof(desc));

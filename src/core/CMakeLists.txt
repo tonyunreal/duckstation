@@ -117,8 +117,8 @@ target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(core PUBLIC Threads::Threads common zlib vulkan-loader)
 target_link_libraries(core PRIVATE glad stb xxhash)
 
-target_compile_definitions(core PRIVATE "WITH_IMGUI=1")
-target_link_libraries(core PRIVATE imgui)
+target_compile_definitions(core PUBLIC "WITH_IMGUI=1")
+target_link_libraries(core PUBLIC imgui)
 
 if(WIN32)
   target_sources(core PRIVATE

@@ -337,11 +337,6 @@ bool VulkanHostDisplay::InitializeRenderDevice(std::string_view shader_cache_dir
   if (!CreateResources())
     return false;
 
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext() && !CreateImGuiContext())
-    return false;
-#endif
-
   return true;
 }
 
@@ -524,8 +519,22 @@ void VulkanHostDisplay::DestroyResources()
 
 void VulkanHostDisplay::DestroyImGuiContext()
 {
+  g_vulkan_context->WaitForGPUIdle();
+
 #ifdef WITH_IMGUI
   ImGui_ImplVulkan_Shutdown();
+#endif
+}
+
+bool VulkanHostDisplay::UpdateImGuiFontTexture()
+{
+#ifdef WITH_IMGUI
+  // Just in case we were drawing something.
+  g_vulkan_context->ExecuteCommandBuffer(true);
+  ImGui_ImplVulkan_DestroyFontUploadObjects();
+  return ImGui_ImplVulkan_CreateFontsTexture(g_vulkan_context->GetCurrentCommandBuffer());
+#else
+  return true;
 #endif
 }
 
@@ -535,11 +544,6 @@ void VulkanHostDisplay::DestroyRenderDevice()
     return;
 
   g_vulkan_context->WaitForGPUIdle();
-
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext())
-    DestroyImGuiContext();
-#endif
 
   DestroyResources();
 

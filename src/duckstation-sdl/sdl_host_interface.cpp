@@ -2,6 +2,7 @@
 #include "common/assert.h"
 #include "common/byte_stream.h"
 #include "common/file_system.h"
+#include "common/image.h"
 #include "common/log.h"
 #include "common/make_array.h"
 #include "common/string_util.h"
@@ -10,8 +11,13 @@
 #include "core/cpu_core.h"
 #include "core/gpu.h"
 #include "core/host_display.h"
+#include "core/host_interface_progress_callback.h"
 #include "core/system.h"
+#include "frontend-common/IconsFontAwesome5.h"
+#include "frontend-common/IconsKenney.h"
+#include "frontend-common/game_list.h"
 #include "frontend-common/icon.h"
+#include "frontend-common/imgui_fullscreen.h"
 #include "frontend-common/imgui_styles.h"
 #include "frontend-common/ini_settings_interface.h"
 #include "frontend-common/opengl_host_display.h"
@@ -24,7 +30,9 @@
 #include "sdl_util.h"
 #include <cinttypes>
 #include <cmath>
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 #include <nfd.h>
 Log_SetChannel(SDLHostInterface);
@@ -32,6 +40,21 @@ Log_SetChannel(SDLHostInterface);
 #ifdef WIN32
 #include "frontend-common/d3d11_host_display.h"
 #endif
+
+using ImGuiFullscreen::BeginFullscreenColumnFractionWindow;
+using ImGuiFullscreen::BeginFullscreenColumnWindow;
+using ImGuiFullscreen::BeginFullscreenWindow;
+using ImGuiFullscreen::BeginMenuButtons;
+using ImGuiFullscreen::EndFullscreenWindow;
+using ImGuiFullscreen::EndMenuButtons;
+using ImGuiFullscreen::EnumChoiceButton;
+using ImGuiFullscreen::LAYOUT_SCREEN_HEIGHT;
+using ImGuiFullscreen::LAYOUT_SCREEN_WIDTH;
+using ImGuiFullscreen::LayoutScale;
+using ImGuiFullscreen::MenuButton;
+using ImGuiFullscreen::MenuCategory;
+using ImGuiFullscreen::MenuImageButton;
+using ImGuiFullscreen::ToggleButton;
 
 SDLHostInterface::SDLHostInterface()
 {
@@ -52,8 +75,10 @@ ALWAYS_INLINE static TinyString GetWindowTitle()
 
 bool SDLHostInterface::CreateSDLWindow()
 {
-  static constexpr u32 DEFAULT_WINDOW_WIDTH = 900;
-  static constexpr u32 DEFAULT_WINDOW_HEIGHT = 700;
+  static constexpr u32 DEFAULT_WINDOW_WIDTH = 1280;
+  static constexpr u32 DEFAULT_WINDOW_HEIGHT = 720 + 20;
+  // static constexpr u32 DEFAULT_WINDOW_WIDTH = 900;
+  // static constexpr u32 DEFAULT_WINDOW_HEIGHT = 700;
 
   // Create window.
   const u32 window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
@@ -110,40 +135,46 @@ bool SDLHostInterface::CreateDisplay()
     return false;
   }
 
-  std::unique_ptr<HostDisplay> display;
   switch (g_settings.gpu_renderer)
   {
     case GPURenderer::HardwareVulkan:
-      display = std::make_unique<FrontendCommon::VulkanHostDisplay>();
+      m_display = std::make_unique<FrontendCommon::VulkanHostDisplay>();
       break;
 
     case GPURenderer::HardwareOpenGL:
 #ifndef WIN32
     default:
 #endif
-      display = std::make_unique<FrontendCommon::OpenGLHostDisplay>();
+      m_display = std::make_unique<FrontendCommon::OpenGLHostDisplay>();
       break;
 
 #ifdef WIN32
     case GPURenderer::HardwareD3D11:
     default:
-      display = std::make_unique<FrontendCommon::D3D11HostDisplay>();
+      m_display = std::make_unique<FrontendCommon::D3D11HostDisplay>();
       break;
 #endif
   }
 
-  Assert(display);
-  if (!display->CreateRenderDevice(wi.value(), g_settings.gpu_adapter, g_settings.gpu_use_debug_device,
-                                   g_settings.gpu_threaded_presentation) ||
-      !display->InitializeRenderDevice(GetShaderCacheBasePath(), g_settings.gpu_use_debug_device,
-                                       g_settings.gpu_threaded_presentation))
+  Assert(m_display);
+  if (!m_display->CreateRenderDevice(wi.value(), g_settings.gpu_adapter, g_settings.gpu_use_debug_device,
+                                     g_settings.gpu_threaded_presentation) ||
+      !m_display->InitializeRenderDevice(GetShaderCacheBasePath(), g_settings.gpu_use_debug_device,
+                                         g_settings.gpu_threaded_presentation))
   {
     ReportError("Failed to create/initialize display render device");
+    m_display.reset();
     return false;
   }
 
+  // safe to init imgui data structures now
+  ImGui::GetIO().DisplaySize =
+    ImVec2(static_cast<float>(m_display->GetWindowWidth()), static_cast<float>(m_display->GetWindowHeight()));
+  ImGuiFullscreen::UpdateLayoutScale();
+  ImGuiFullscreen::UpdateFonts();
+
   bool imgui_result;
-  switch (display->GetRenderAPI())
+  switch (m_display->GetRenderAPI())
   {
 #ifdef WIN32
     case HostDisplay::RenderAPI::D3D11:
@@ -164,25 +195,31 @@ bool SDLHostInterface::CreateDisplay()
       imgui_result = true;
       break;
   }
-  if (!imgui_result)
+  if (!imgui_result || !m_display->CreateImGuiContext())
   {
-    ReportError("Failed to initialize ImGui SDL2 wrapper");
+    ReportError("Failed to initialize ImGui on device");
+    m_display->DestroyRenderDevice();
+    m_display.reset();
     return false;
   }
 
-  m_app_icon_texture =
-    display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, APP_ICON_DATA, APP_ICON_WIDTH * sizeof(u32));
-  if (!m_app_icon_texture)
+  if (!LoadResources())
+  {
+    m_display->DestroyImGuiContext();
+    m_display->DestroyRenderDevice();
+    m_display.reset();
     return false;
+  }
 
-  display->SetDisplayTopMargin(m_fullscreen ? 0 : static_cast<int>(20.0f * ImGui::GetIO().DisplayFramebufferScale.x));
-  m_display = std::move(display);
+  m_display->SetDisplayTopMargin(m_fullscreen ? 0 : static_cast<int>(20.0f * ImGui::GetIO().DisplayFramebufferScale.x));
   return true;
 }
 
 void SDLHostInterface::DestroyDisplay()
 {
-  m_app_icon_texture.reset();
+  ClearSaveStateListEntries();
+  DestroyResources();
+  m_display->DestroyImGuiContext();
   m_display->DestroyRenderDevice();
   m_display.reset();
 }
@@ -199,14 +236,32 @@ void SDLHostInterface::CreateImGuiContext()
   ImGui::GetStyle().ScaleAllSizes(framebuffer_scale);
 
   ImGui::StyleColorsDarker();
-  ImGui::AddRobotoRegularFont(15.0f * framebuffer_scale);
 }
 
 void SDLHostInterface::UpdateFramebufferScale()
 {
+  ImGuiIO& io = ImGui::GetIO();
   const float framebuffer_scale = SDLUtil::GetDPIScaleFactor(m_window);
-  ImGui::GetIO().DisplayFramebufferScale.x = framebuffer_scale;
-  ImGui::GetIO().DisplayFramebufferScale.y = framebuffer_scale;
+  if (framebuffer_scale != io.DisplayFramebufferScale.x)
+  {
+    io.DisplayFramebufferScale = ImVec2(framebuffer_scale, framebuffer_scale);
+    ImGui::Render();
+    ImGui::GetStyle().ScaleAllSizes(framebuffer_scale);
+    ImGui::NewFrame();
+  }
+
+  if (ImGuiFullscreen::UpdateLayoutScale())
+  {
+    ImGui::Render();
+
+    if (ImGuiFullscreen::UpdateFonts())
+    {
+      if (!m_display->UpdateImGuiFontTexture())
+        Panic("Failed to update font texture");
+    }
+
+    ImGui::NewFrame();
+  }
 }
 
 bool SDLHostInterface::AcquireHostDisplay()
@@ -287,6 +342,7 @@ void SDLHostInterface::OnSystemCreated()
 {
   CommonHostInterface::OnSystemCreated();
 
+  m_current_main_window = MainWindowType::None;
   ClearImGuiFocus();
 }
 
@@ -295,13 +351,21 @@ void SDLHostInterface::OnSystemPaused(bool paused)
   CommonHostInterface::OnSystemPaused(paused);
 
   if (!paused)
+  {
+    m_current_main_window = MainWindowType::None;
     ClearImGuiFocus();
+  }
+  else
+  {
+    m_current_main_window = MainWindowType::Pause;
+  }
 }
 
 void SDLHostInterface::OnSystemDestroyed()
 {
   CommonHostInterface::OnSystemDestroyed();
   ReportFormattedMessage("System shut down.");
+  m_current_main_window = MainWindowType::Landing;
 }
 
 void SDLHostInterface::OnRunningGameChanged()
@@ -634,11 +698,15 @@ void SDLHostInterface::DrawImGuiWindows()
 
   CommonHostInterface::DrawImGuiWindows();
 
-  if (System::IsShutdown())
-    DrawPoweredOffWindow();
+  ImGuiFullscreen::BeginLayout();
+
+  if (m_current_main_window != MainWindowType::None)
+    DrawMainWindow();
+
+  ImGuiFullscreen::EndLayout();
 
   if (m_settings_window_open)
-    DrawSettingsWindow();
+    DrawOldSettingsWindow();
 
   if (m_about_window_open)
     DrawAboutWindow();
@@ -1218,103 +1286,706 @@ void SDLHostInterface::DrawDebugMenu()
   }
 }
 
-void SDLHostInterface::DrawPoweredOffWindow()
+bool SDLHostInterface::LoadResources()
 {
-  static constexpr int WINDOW_WIDTH = 400;
-  static constexpr int WINDOW_HEIGHT = 650;
-  static constexpr int BUTTON_WIDTH = 200;
-  static constexpr int BUTTON_HEIGHT = 40;
-  const float framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale.x;
+#if 0
+  m_app_icon_texture =
+    m_display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, APP_ICON_DATA, APP_ICON_WIDTH * sizeof(u32));
+#else
+  m_app_icon_texture = LoadTextureResource("logo.png");
+#endif
+  m_placeholder_texture = m_display->CreateTexture(PLACEHOLDER_ICON_WIDTH, PLACEHOLDER_ICON_HEIGHT,
+                                                   PLACEHOLDER_ICON_DATA, sizeof(u32) * PLACEHOLDER_ICON_WIDTH, false);
+  if (!m_app_icon_texture || !m_placeholder_texture)
+    return false;
 
-  ImGui::SetNextWindowSize(ImVec2(static_cast<float>(WINDOW_WIDTH) * framebuffer_scale,
-                                  static_cast<float>(WINDOW_HEIGHT) * framebuffer_scale));
-  ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f),
-                          ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  m_disc_region_textures[static_cast<u32>(DiscRegion::NTSC_U)] = LoadTextureResource("flag-uc.png");
+  m_disc_region_textures[static_cast<u32>(DiscRegion::NTSC_J)] = LoadTextureResource("flag-jp.png");
+  m_disc_region_textures[static_cast<u32>(DiscRegion::PAL)] = LoadTextureResource("flag-eu.png");
 
-  if (!ImGui::Begin("Powered Off", nullptr,
-                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-                      ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize |
-                      ImGuiWindowFlags_NoBringToFrontOnFocus))
+  return true;
+}
+
+void SDLHostInterface::DestroyResources()
+{
+  m_app_icon_texture.reset();
+  m_placeholder_texture.reset();
+  for (auto& tex : m_disc_region_textures)
+    tex.reset();
+}
+
+std::unique_ptr<HostDisplayTexture> SDLHostInterface::LoadTextureResource(const char* name)
+{
+  std::unique_ptr<HostDisplayTexture> texture;
+
+  const std::string path(GetProgramDirectoryRelativePath("resources" FS_OSPATH_SEPARATOR_STR "%s", name));
+
+  Common::RGBA8Image image;
+  if (Common::LoadImageFromFile(&image, path.c_str()) && image.IsValid())
   {
-    ImGui::End();
-  }
-
-  ImGui::SetCursorPosX(static_cast<float>((WINDOW_WIDTH - APP_ICON_WIDTH) / 2) * framebuffer_scale);
-  ImGui::Image(m_app_icon_texture->GetHandle(), ImVec2(static_cast<float>(APP_ICON_WIDTH) * framebuffer_scale,
-                                                       static_cast<float>(APP_ICON_HEIGHT) * framebuffer_scale));
-  ImGui::SetCursorPosY(static_cast<float>(APP_ICON_HEIGHT + 32) * framebuffer_scale);
-
-  const ImVec2 button_size(static_cast<float>(BUTTON_WIDTH) * framebuffer_scale,
-                           static_cast<float>(BUTTON_HEIGHT) * framebuffer_scale);
-  const float button_left = static_cast<float>((WINDOW_WIDTH - BUTTON_WIDTH) / 2) * framebuffer_scale;
-
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f * framebuffer_scale);
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f * framebuffer_scale);
-  ImGui::PushStyleColor(ImGuiCol_Button, 0xFF202020);
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, 0xFF808080);
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, 0xFF575757);
-
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Resume", button_size))
-  {
-    RunLater([this]() { ResumeSystemFromMostRecentState(); });
-    ClearImGuiFocus();
-  }
-  ImGui::NewLine();
-
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Start Disc", button_size))
-  {
-    RunLater([this]() { DoStartDisc(); });
-    ClearImGuiFocus();
-  }
-  ImGui::NewLine();
-
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Start BIOS", button_size))
-  {
-    RunLater([this]() {
-      SystemBootParameters boot_params;
-      BootSystem(boot_params);
-    });
-    ClearImGuiFocus();
-  }
-  ImGui::NewLine();
-
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Load State", button_size))
-    ImGui::OpenPopup("PowerOffWindow_LoadStateMenu");
-  if (ImGui::BeginPopup("PowerOffWindow_LoadStateMenu"))
-  {
-    for (u32 i = 1; i <= GLOBAL_SAVE_STATE_SLOTS; i++)
+    texture = m_display->CreateTexture(image.GetWidth(), image.GetHeight(), image.GetPixels(), image.GetByteStride());
+    if (texture)
     {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "State %u", i);
-      if (ImGui::MenuItem(buf))
+      Log_DevPrintf("Uploaded texture resource '%s' (%ux%u)", name, image.GetWidth(), image.GetHeight());
+      return texture;
+    }
+
+    Log_ErrorPrintf("failed to create %ux%u texture for resource", image.GetWidth(), image.GetHeight());
+  }
+
+  Log_ErrorPrintf("Missing resource '%s', using fallback", name);
+
+  texture = m_display->CreateTexture(PLACEHOLDER_ICON_WIDTH, PLACEHOLDER_ICON_HEIGHT, PLACEHOLDER_ICON_DATA,
+                                     sizeof(u32) * PLACEHOLDER_ICON_WIDTH, false);
+  if (!texture)
+    Panic("Failed to create placeholder texture");
+
+  return texture;
+}
+
+void SDLHostInterface::DrawMainWindow()
+{
+  switch (m_current_main_window)
+  {
+    case MainWindowType::Landing:
+      DrawLandingWindow();
+      break;
+    case MainWindowType::GameList:
+      DrawGameListWindow();
+      break;
+    case MainWindowType::Settings:
+      DrawSettingsWindow();
+      break;
+    case MainWindowType::Pause:
+      DrawPauseWindow();
+      break;
+    case MainWindowType::LoadState:
+      DrawSaveStateSelector(true);
+      break;
+    default:
+      break;
+  }
+}
+
+void SDLHostInterface::ReturnToMainWindow()
+{
+  if (System::IsValid())
+    m_current_main_window = MainWindowType::Pause;
+  else
+    m_current_main_window = MainWindowType::Landing;
+}
+
+void SDLHostInterface::DrawLandingWindow()
+{
+  if (BeginFullscreenColumnWindow(0.0f, 571.0f, "logo", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
+  {
+    ImGui::SetCursorPos(LayoutScale(ImVec2(120.0f, 170.0f)));
+    ImGui::Image(m_app_icon_texture->GetHandle(), LayoutScale(ImVec2(380.0f, 380.0f)));
+  }
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(570.0f, LAYOUT_SCREEN_WIDTH, "menu"))
+  {
+    BeginMenuButtons(7, true);
+
+    if (MenuButton(" " ICON_FA_PLAY_CIRCLE "  Resume",
+                   "Starts the console from where it was before it was last closed."))
+    {
+      RunLater([this]() { ResumeSystemFromMostRecentState(); });
+      ClearImGuiFocus();
+    }
+
+    if (MenuButton(" " ICON_FA_LIST "  Open Game List",
+                   "Launch a game from images scanned from your game directories."))
+    {
+      RunLater([this]() { SwitchToGameList(); });
+      ClearImGuiFocus();
+    }
+
+    if (MenuButton(" " ICON_FA_FOLDER_OPEN "  Start File", "Launch a game by selecting a file/disc image."))
+    {
+      RunLater([this]() { DoStartDisc(); });
+      ClearImGuiFocus();
+    }
+
+    if (MenuButton(" " ICON_FA_TOOLBOX "  Start BIOS", "Start the console without any disc inserted."))
+    {
+      RunLater([this]() {
+        SystemBootParameters boot_params;
+        BootSystem(boot_params);
+      });
+      ClearImGuiFocus();
+    }
+
+    if (MenuButton(" " ICON_FA_UNDO "  Load State", "Loads a global save state."))
+    {
+      m_current_main_window = MainWindowType::LoadState;
+      PopulateSaveStateListEntries();
+    }
+
+    if (MenuButton(" " ICON_FA_SLIDERS_H "  Settings", "Change settings for the emulator."))
+      m_current_main_window = MainWindowType::Settings;
+
+    if (MenuButton(" " ICON_FA_SIGN_OUT_ALT "  Exit", "Exits the program."))
+      m_quit_request = true;
+
+    EndMenuButtons();
+  }
+
+  EndFullscreenWindow();
+}
+
+void SDLHostInterface::DrawSettingsWindow()
+{
+
+  if (BeginFullscreenColumnWindow(0.0f, 300.0f, "settings_category", ImVec4(0.18f, 0.18f, 0.18f, 1.00f)))
+  {
+    static constexpr std::array<const char*, static_cast<u32>(SettingsPage::Count)> titles = {
+      {ICON_FA_WINDOW_MAXIMIZE "  Interface Settings", ICON_FA_MICROCHIP "  BIOS Settings",
+       ICON_FA_HDD "  Console Settings", ICON_FA_GAMEPAD "  Controller Settings", ICON_FA_KEYBOARD "  Hotkey Settings",
+       ICON_FA_SD_CARD "  Memory Card Settings", ICON_FA_TV "  Display Settings",
+       ICON_FA_MAGIC "  Enhancement Settings", ICON_FA_HEADPHONES "  Audio Settings",
+       ICON_FA_EXCLAMATION_TRIANGLE "  Advanced Settings"}};
+
+    BeginMenuButtons(static_cast<u32>(titles.size()) + 1u, false);
+    for (u32 i = 0; i < static_cast<u32>(titles.size()); i++)
+    {
+      if (MenuCategory(titles[i], m_settings_page == static_cast<SettingsPage>(i)))
+        m_settings_page = static_cast<SettingsPage>(i);
+    }
+
+    ImGui::SetCursorPosY(LayoutScale(670.0f));
+    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+      ReturnToMainWindow();
+
+    EndMenuButtons();
+  }
+
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(300.0f, LAYOUT_SCREEN_WIDTH, "settings_parent"))
+  {
+    bool settings_changed = false;
+
+    switch (m_settings_page)
+    {
+      case SettingsPage::InterfaceSettings:
       {
-        RunLater([this, i]() { LoadState(true, i); });
-        ClearImGuiFocus();
+        BeginMenuButtons(8, false);
+
+        settings_changed |=
+          ToggleButton("Pause On Start", "Pauses the emulator when a game is started.", &m_settings_copy.start_paused);
+        settings_changed |= ToggleButton("Pause On Focus Loss",
+                                         "Pauses the emulator when you minimize the window or switch to another "
+                                         "application, and unpauses when you switch back.",
+                                         &m_settings_copy.pause_on_focus_loss);
+        settings_changed |=
+          ToggleButton("Confirm Power Off",
+                       "Determines whether a prompt will be displayed to confirm shutting down the emulator/game "
+                       "when the hotkey is pressed.",
+                       &m_settings_copy.confim_power_off);
+        settings_changed |=
+          ToggleButton("Save State On Exit",
+                       "Automatically saves the emulator state when powering down or exiting. You can then "
+                       "resume directly from where you left off next time.",
+                       &m_settings_copy.save_state_on_exit);
+        settings_changed |=
+          ToggleButton("Start Fullscreen", "Automatically switches to fullscreen mode when a game is started.",
+                       &m_settings_copy.start_fullscreen);
+        settings_changed |=
+          ToggleButton("Load Devices From Save States",
+                       "When enabled, memory cards and controllers will be overwritten when save states are loaded.",
+                       &m_settings_copy.load_devices_from_save_states);
+        settings_changed |= ToggleButton(
+          "Apply Per-Game Settings",
+          "When enabled, per-game settings will be applied, and incompatible enhancements will be disabled.",
+          &m_settings_copy.apply_game_settings);
+        settings_changed |=
+          ToggleButton("Automatically Load Cheats", "Automatically loads and applies cheats on game start.",
+                       &m_settings_copy.auto_load_cheats);
+
+        EndMenuButtons();
+      }
+      break;
+
+      case SettingsPage::GameListSettings:
+        break;
+
+      case SettingsPage::ConsoleSettings:
+        break;
+
+      case SettingsPage::ControllerSettings:
+        break;
+
+      case SettingsPage::HotkeySettings:
+        break;
+
+      case SettingsPage::MemoryCardSettings:
+        break;
+
+      case SettingsPage::DisplaySettings:
+        break;
+
+      case SettingsPage::EnhancementSettings:
+      {
+        static const auto resolution_scale_text_callback = [](u32 value) -> const char* {
+          static constexpr std::array<const char*, 17> texts = {
+            {"Automatic based on window size", "1x", "2x", "3x (for 720p)", "4x", "5x (for 1080p)", "6x (for 1440p)",
+             "7x", "8x", "9x (for 4K)", "10x", "11x", "12x", "13x", "14x", "15x", "16x"
+
+            }};
+          return (value >= texts.size()) ? "" : texts[value];
+        };
+
+        BeginMenuButtons(13, false);
+
+        settings_changed |= EnumChoiceButton<u32, u32>(
+          "Internal Resolution Scale",
+          "Scales internal VRAM resolution by the specified multiplier. Some games require 1x VRAM resolution.",
+          &m_settings_copy.gpu_resolution_scale, resolution_scale_text_callback, 17);
+        settings_changed |= EnumChoiceButton(
+          "Texture Filtering",
+          "Smooths out the blockyness of magnified textures on 3D objects. Will have a greater effect "
+          "on higher resolution scales.",
+          &m_settings_copy.gpu_texture_filter, &Settings::GetTextureFilterDisplayName, GPUTextureFilter::Count);
+        settings_changed |=
+          ToggleButton("True Color Rendering",
+                       "Disables dithering and uses the full 8 bits per channel of color information. May break "
+                       "rendering in some games.",
+                       &m_settings_copy.gpu_true_color);
+        settings_changed |= ToggleButton(
+          "Scaled Dithering",
+          "Scales the dithering pattern with the internal rendering resolution, making it less noticeable. "
+          "Usually safe to enable.",
+          &m_settings_copy.gpu_scaled_dithering);
+        settings_changed |= ToggleButton(
+          "Widescreen Hack", "Increases the field of view from 4:3 to the chosen display aspect ratio in 3D games.",
+          &m_settings_copy.gpu_widescreen_hack);
+        settings_changed |=
+          ToggleButton("Disable Interlacing",
+                       "Disables interlaced rendering and display in the GPU. Some games can render in 480p this way, "
+                       "but others will break.",
+                       &m_settings_copy.gpu_disable_interlacing);
+        settings_changed |= ToggleButton(
+          "Force NTSC Timings",
+          "Forces PAL games to run at NTSC timings, i.e. 60hz. Some PAL games will run at their \"normal\" "
+          "speeds, while others will break.",
+          &m_settings_copy.gpu_force_ntsc_timings);
+        settings_changed |=
+          ToggleButton("Force 4:3 For 24-Bit Display",
+                       "Switches back to 4:3 display aspect ratio when displaying 24-bit content, usually FMVs.",
+                       &m_settings_copy.display_force_4_3_for_24bit);
+        settings_changed |= ToggleButton(
+          "Chroma Smoothing For 24-Bit Display",
+          "Smooths out blockyness between colour transitions in 24-bit content, usually FMVs. Only applies "
+          "to the hardware renderers.",
+          &m_settings_copy.gpu_24bit_chroma_smoothing);
+        settings_changed |=
+          ToggleButton("PGXP Geometry Correction",
+                       "Reduces \"wobbly\" polygons by attempting to preserve the fractional component through memory "
+                       "transfers.",
+                       &m_settings_copy.gpu_pgxp_enable, m_settings_copy.gpu_pgxp_enable);
+        settings_changed |=
+          ToggleButton("PGXP Texture Correction",
+                       "Uses perspective-correct interpolation for texture coordinates and colors, straightening out "
+                       "warped textures.",
+                       &m_settings_copy.gpu_pgxp_texture_correction, m_settings_copy.gpu_pgxp_enable);
+        settings_changed |=
+          ToggleButton("PGXP Culling Correction",
+                       "Increases the precision of polygon culling, reducing the number of holes in geometry.",
+                       &m_settings_copy.gpu_pgxp_culling, m_settings_copy.gpu_pgxp_enable);
+        settings_changed |= ToggleButton(
+          "PGXP Depth Buffer", "Reduces polygon Z-fighting through depth testing. Low compatibility with games.",
+          &m_settings_copy.gpu_pgxp_depth_buffer,
+          m_settings_copy.gpu_pgxp_enable && m_settings_copy.gpu_pgxp_texture_correction);
+
+        EndMenuButtons();
+      }
+      break;
+
+      case SettingsPage::AudioSettings:
+        break;
+
+      case SettingsPage::AdvancedSettings:
+        break;
+    }
+
+    if (settings_changed)
+      RunLater([this]() { SaveAndUpdateSettings(); });
+  }
+
+  EndFullscreenWindow();
+}
+
+void SDLHostInterface::DrawPauseWindow()
+{
+  ImDrawList* dl = ImGui::GetBackgroundDrawList();
+  //dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize, IM_COL32(255, 255, 255, 60));
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, LayoutScale(10.0f));
+
+  if (BeginFullscreenWindow(-0.5f, -0.5f, 500.0f, 430.0f, "pause_menu", HEX_TO_IMVEC4(0x212121, 240)))
+  {
+    ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
+    ImGui::Image(GetCoverForCurrentGame()->GetHandle(), LayoutScale(50.0f, 50.0f));
+    ImGui::SetCursorPos(LayoutScale(90.0f, 20.0f));
+    ImGui::PushFont(ImGuiFullscreen::g_large_font);
+    ImGui::TextUnformatted(System::GetRunningTitle().c_str());
+    ImGui::PopFont();
+    ImGui::SetCursorPosX(LayoutScale(90.0f));
+    ImGui::PushFont(ImGuiFullscreen::g_medium_font);
+    ImGui::TextUnformatted(System::GetRunningPath().c_str());
+    ImGui::PopFont();
+
+    ImGui::SetCursorPosY(LayoutScale(90.0f));
+
+    BeginMenuButtons(9, false);
+
+    MenuCategory(ICON_FA_BACKWARD "  Back To Game", false);
+    MenuCategory(ICON_FA_UNDO "  Load State", false);
+    MenuCategory(ICON_FA_SAVE "  Save State", false);
+    MenuCategory(ICON_FA_FAST_FORWARD "  Fast Forward", false);
+    MenuCategory(ICON_FA_SYNC "  Reset", false);
+    MenuCategory(ICON_FA_FROWN_OPEN "  Cheats", false);
+
+    if (MenuCategory(ICON_FA_SLIDERS_H "  Settings", false))
+      m_current_main_window = MainWindowType::Settings;
+
+    if (MenuCategory(ICON_FA_POWER_OFF "  Exit Game", false))
+      m_quit_request = true;
+
+    EndMenuButtons();
+  }
+
+  ImGui::PopStyleVar();
+
+  EndFullscreenWindow();
+}
+
+void SDLHostInterface::InitializePlaceholderSaveStateListEntry(SaveStateListEntry* li, s32 slot, bool global)
+{
+  if (global)
+    li->title = StringUtil::StdStringFromFormat("Global Slot %d##global_slot_%d", slot, slot);
+  else
+    li->title =
+      StringUtil::StdStringFromFormat("%s Slot %d##game_slot_%d", System::GetRunningTitle().c_str(), slot, slot);
+
+  li->summary = "No Save State";
+
+  std::string().swap(li->path);
+  li->slot = slot;
+  li->global = global;
+}
+
+void SDLHostInterface::InitializeSaveStateListEntry(SaveStateListEntry* li,
+                                                    CommonHostInterface::ExtendedSaveStateInfo* ssi)
+{
+  if (ssi->global)
+  {
+    li->title =
+      StringUtil::StdStringFromFormat("Global Slot %d - %s##global_slot_%d", ssi->slot, ssi->title.c_str(), ssi->slot);
+  }
+  else
+  {
+    li->title = StringUtil::StdStringFromFormat("%s Slot %d##game_slot_%d", ssi->title.c_str(), ssi->slot, ssi->slot);
+  }
+
+  li->summary =
+    StringUtil::StdStringFromFormat("%s - Saved %s", ssi->game_code.c_str(),
+                                    Timestamp::FromUnixTimestamp(ssi->timestamp).ToString("%c").GetCharArray());
+  li->slot = ssi->slot;
+  li->global = ssi->global;
+  li->path = std::move(ssi->path);
+
+  li->preview_texture.reset();
+  if (ssi && !ssi->screenshot_data.empty())
+  {
+    li->preview_texture =
+      m_display->CreateTexture(ssi->screenshot_width, ssi->screenshot_height, ssi->screenshot_data.data(),
+                               sizeof(u32) * ssi->screenshot_width, false);
+  }
+  else
+  {
+    li->preview_texture = m_display->CreateTexture(PLACEHOLDER_ICON_WIDTH, PLACEHOLDER_ICON_HEIGHT,
+                                                   PLACEHOLDER_ICON_DATA, sizeof(u32) * PLACEHOLDER_ICON_WIDTH, false);
+  }
+
+  if (!li->preview_texture)
+    Log_ErrorPrintf("Failed to upload save state image to GPU");
+}
+
+void SDLHostInterface::PopulateSaveStateListEntries()
+{
+  m_save_state_selector_slots.clear();
+
+  if (!System::GetRunningCode().empty())
+  {
+    for (s32 i = 1; i <= CommonHostInterface::PER_GAME_SAVE_STATE_SLOTS; i++)
+    {
+      std::optional<CommonHostInterface::ExtendedSaveStateInfo> ssi =
+        GetExtendedSaveStateInfo(System::GetRunningCode().c_str(), i);
+
+      SaveStateListEntry li;
+      if (ssi)
+        InitializeSaveStateListEntry(&li, &ssi.value());
+      else
+        InitializePlaceholderSaveStateListEntry(&li, i, false);
+
+      m_save_state_selector_slots.push_back(std::move(li));
+    }
+  }
+
+  for (s32 i = 1; i <= CommonHostInterface::GLOBAL_SAVE_STATE_SLOTS; i++)
+  {
+    std::optional<CommonHostInterface::ExtendedSaveStateInfo> ssi = GetExtendedSaveStateInfo(nullptr, i);
+
+    SaveStateListEntry li;
+    if (ssi)
+      InitializeSaveStateListEntry(&li, &ssi.value());
+    else
+      InitializePlaceholderSaveStateListEntry(&li, i, true);
+
+    m_save_state_selector_slots.push_back(std::move(li));
+  }
+}
+
+void SDLHostInterface::ClearSaveStateListEntries()
+{
+  m_save_state_selector_slots.clear();
+}
+
+void SDLHostInterface::DrawSaveStateSelector(bool is_loading)
+{
+  const HostDisplayTexture* selected_texture = m_placeholder_texture.get();
+
+  // drawn back the front so the hover changes the image
+  if (BeginFullscreenColumnWindow(570.0f, LAYOUT_SCREEN_WIDTH, "save_state_selector_slots"))
+  {
+    BeginMenuButtons(static_cast<u32>(m_save_state_selector_slots.size()), true);
+
+    for (const SaveStateListEntry& entry : m_save_state_selector_slots)
+    {
+      if (MenuButton(entry.title.c_str(), entry.summary.c_str()))
+      {
+        const std::string& path = entry.path;
+        RunLater([this, path]() { LoadState(path.c_str()); });
+      }
+
+      if (ImGui::IsItemHovered())
+        selected_texture = entry.preview_texture.get();
+    }
+
+    EndMenuButtons();
+  }
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(0.0f, 570.0f, "save_state_selector_preview", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
+  {
+    ImGui::SetCursorPos(LayoutScale(ImVec2(85.0f, 160.0f)));
+    ImGui::Image(selected_texture ? selected_texture->GetHandle() : m_placeholder_texture->GetHandle(),
+                 LayoutScale(ImVec2(400.0f, 400.0f)));
+
+    ImGui::SetCursorPosY(LayoutScale(670.0f));
+    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+      ReturnToMainWindow();
+  }
+  EndFullscreenWindow();
+}
+
+void SDLHostInterface::DrawGameListWindow()
+{
+  const GameListEntry* selected_entry = nullptr;
+
+  if (BeginFullscreenColumnWindow(1220.0f, LAYOUT_SCREEN_WIDTH, "game_list_quick_select"))
+  {
+    const float height = 24.0f;
+    BeginMenuButtons(29, false);
+
+    ImGui::SetCursorPos(LayoutScale(ImVec2(17.0f, 4.0f)));
+    ImGui::PushFont(ImGuiFullscreen::g_large_font);
+    ImGui::TextUnformatted(ICON_KI_BUTTON_L1);
+    ImGui::PopFont();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiFullscreen::UIPrimaryDisabledTextColor());
+    MenuCategory("0", false, false, height, ImGuiFullscreen::g_medium_font);
+    ImGui::PopStyleColor();
+
+    for (char letter = 'A'; letter <= 'Z'; letter++)
+    {
+      TinyString str;
+      str.Format("%c", letter);
+      MenuCategory(str, false, true, height, ImGuiFullscreen::g_medium_font);
+    }
+
+    ImGui::SetCursorPosX(LayoutScale(17.0f));
+    ImGui::PushFont(ImGuiFullscreen::g_large_font);
+    ImGui::TextUnformatted(ICON_KI_BUTTON_R1);
+    ImGui::PopFont();
+
+    EndMenuButtons();
+  }
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(450.0f, 1220.0f, "game_list_entries"))
+  {
+    BeginMenuButtons(m_game_list->GetEntryCount(), false);
+
+    for (const GameListEntry& entry : m_game_list->GetEntries())
+    {
+      const HostDisplayTexture* cover_texture = GetGameListCover(&entry);
+      const float cover_ar =
+        static_cast<float>(cover_texture->GetWidth()) / static_cast<float>(cover_texture->GetHeight());
+      if (MenuButton(entry.title.c_str(), entry.path.c_str()))
+      {
+        // launch game
+      }
+
+      if (ImGui::IsItemHovered())
+        selected_entry = &entry;
+    }
+
+    EndMenuButtons();
+  }
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(0.0f, 450.0f, "game_list_info", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
+  {
+    const auto* window = ImGui::GetCurrentWindow();
+    const ImVec2 base_pos(window->DC.CursorPos);
+
+    ImGui::SetCursorPos(LayoutScale(ImVec2(50.0f, 50.0f)));
+    ImGui::Image(selected_entry ? GetGameListCover(selected_entry)->GetHandle() : m_placeholder_texture->GetHandle(),
+                 LayoutScale(ImVec2(350.0f, 350.0f)));
+
+    if (selected_entry)
+    {
+      const float field_margin_y = 10.0f;
+      const float start_x = 50.0f;
+      const float end_x = 400.0f;
+      float text_y = 425.0f;
+      SmallString text;
+
+      // title
+      ImGui::PushFont(ImGuiFullscreen::g_large_font);
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE)),
+                               selected_entry->title.c_str(), nullptr, nullptr, ImVec2(0.5f, 0.0f), nullptr);
+      ImGui::PopFont();
+      text_y += ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE + field_margin_y;
+
+      ImGui::PushFont(ImGuiFullscreen::g_medium_font);
+
+      // code
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               selected_entry->code.c_str(), nullptr, nullptr, ImVec2(0.5f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + 25.0f;
+
+      // region
+      text.Format("Region: %s", Settings::GetDiscRegionDisplayName(selected_entry->region));
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+
+      // size
+      text.Format("Size: %.2f MB", static_cast<float>(selected_entry->total_size) / 1048576.0f);
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+
+      // compatibility
+      text.Format("Compatibility: %s",
+                  GameList::GetGameListCompatibilityRatingString(selected_entry->compatibility_rating));
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+
+      // TODO: last played
+      text.Format("Last Played: Never");
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+
+      // TODO: game settings
+      text.Format("4 Per-Game Settings Set");
+      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
+                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
+                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
+      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+
+      ImGui::PopFont();
+    }
+
+    ImGui::SetCursorPosY(LayoutScale(670.0f));
+    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+      ReturnToMainWindow();
+  }
+  EndFullscreenWindow();
+}
+
+void SDLHostInterface::LoadGameList()
+{
+  if (m_game_list_loaded)
+    return;
+
+  HostInterfaceProgressCallback cb;
+  m_game_list->SetSearchDirectoriesFromSettings(*m_settings_interface.get());
+  m_game_list->Refresh(false, false, &cb);
+  m_game_list_loaded = true;
+}
+
+void SDLHostInterface::SwitchToGameList()
+{
+  LoadGameList();
+  m_current_main_window = MainWindowType::GameList;
+}
+
+HostDisplayTexture* SDLHostInterface::GetGameListCover(const GameListEntry* entry)
+{
+  // lookup and grab cover image
+  auto cover_it = m_cover_image_map.find(entry->path);
+  if (cover_it == m_cover_image_map.end())
+  {
+    const std::string cover_path(m_game_list->GetCoverImagePathForEntry(entry));
+    std::unique_ptr<HostDisplayTexture> texture;
+    if (!cover_path.empty())
+    {
+      Log_DevPrintf("Trying to load cover from '%s' for '%s'", cover_path.c_str(), entry->path.c_str());
+
+      Common::RGBA8Image image;
+      if (Common::LoadImageFromFile(&image, cover_path.c_str()) || !image.IsValid())
+      {
+        texture =
+          m_display->CreateTexture(image.GetWidth(), image.GetHeight(), image.GetPixels(), image.GetByteStride());
+        if (!texture)
+          Log_ErrorPrintf("Failed to upload %ux%u texture to GPU", image.GetWidth(), image.GetHeight());
+      }
+      else
+      {
+        Log_ErrorPrintf("Failed to load cover from '%s'", cover_path.c_str());
       }
     }
-    ImGui::EndPopup();
+
+    cover_it = m_cover_image_map.emplace(entry->path, std::move(texture)).first;
   }
-  ImGui::NewLine();
 
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Settings", button_size))
-    m_settings_window_open = true;
-  ImGui::NewLine();
+  return cover_it->second ? cover_it->second.get() : m_placeholder_texture.get();
+}
 
-  ImGui::SetCursorPosX(button_left);
-  if (ImGui::Button("Exit", button_size))
-    m_quit_request = true;
+HostDisplayTexture* SDLHostInterface::GetCoverForCurrentGame()
+{
+  if (!m_game_list_loaded)
+    RunLater([this]() { LoadGameList(); });
 
-  ImGui::NewLine();
+  const GameListEntry* entry = m_game_list->GetEntryForPath(System::GetRunningPath().c_str());
+  if (!entry)
+    return m_placeholder_texture.get();
 
-  ImGui::PopStyleColor(3);
-  ImGui::PopStyleVar(2);
-
-  ImGui::End();
+  return GetGameListCover(entry);
 }
 
 static bool DrawSettingsSectionHeader(const char* title)
@@ -1322,7 +1993,7 @@ static bool DrawSettingsSectionHeader(const char* title)
   return ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_DefaultOpen /* | ImGuiTreeNodeFlags_Leaf*/);
 }
 
-void SDLHostInterface::DrawSettingsWindow()
+void SDLHostInterface::DrawOldSettingsWindow()
 {
   const float framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale.x;
 
