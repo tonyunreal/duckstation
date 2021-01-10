@@ -6,6 +6,7 @@
 #include "pgxp.h"
 #include "settings.h"
 #include "system.h"
+#include "texture_replacements.h"
 #include <cmath>
 #include <sstream>
 #include <tuple>
@@ -589,8 +590,18 @@ void GPU_HW::LoadVertices()
       if (rc.quad_polygon && m_resolution_scale > 1)
         HandleFlippedQuadTextureCoordinates(vertices.data());
 
-      if (m_using_uv_limits && textured)
-        ComputePolygonUVLimits(vertices.data(), num_vertices);
+      if (textured)
+      {
+        if (m_using_uv_limits)
+          ComputePolygonUVLimits(vertices.data(), num_vertices);
+        if (g_settings.texture_replacements.dump_textures)
+        {
+          ComputePolygonUVLimits(vertices.data(), num_vertices);
+          g_texture_replacements.AddDraw(m_draw_mode.mode_reg.bits, m_draw_mode.palette_reg,
+                                         vertices[0].uv_limits & 0xFF, (vertices[0].uv_limits >> 8) & 0xFF,
+                                         (vertices[0].uv_limits >> 16) & 0xFF, (vertices[0].uv_limits >> 24));
+        }
+      }
 
       if (!IsDrawingAreaIsValid())
         return;
@@ -709,6 +720,12 @@ void GPU_HW::LoadVertices()
 
       if (!IsDrawingAreaIsValid())
         return;
+
+      if (g_settings.texture_replacements.dump_textures)
+      {
+        g_texture_replacements.AddDraw(m_draw_mode.mode_reg.bits, m_draw_mode.palette_reg, orig_tex_left, orig_tex_top,
+                                       orig_tex_left + rectangle_width, orig_tex_top + rectangle_height);
+      }
 
       // we can split the rectangle up into potentially 8 quads
       SetBatchDepthBuffer(false);

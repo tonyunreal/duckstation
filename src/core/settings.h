@@ -180,17 +180,16 @@ struct Settings
     bool enable_vram_write_replacements = false;
     bool preload_textures = false;
 
-    bool dump_vram_writes = false;
-    bool dump_vram_write_force_alpha_channel = true;
+    bool enable_dumping = false;
+    bool dump_backgrounds = false;
+    bool dump_textures = false;
+
+    bool dump_force_alpha_channel = true;
     u32 dump_vram_write_width_threshold = 128;
     u32 dump_vram_write_height_threshold = 128;
 
     ALWAYS_INLINE bool AnyReplacementsEnabled() const { return enable_vram_write_replacements; }
-
-    ALWAYS_INLINE bool ShouldDumpVRAMWrite(u32 width, u32 height)
-    {
-      return dump_vram_writes && width >= dump_vram_write_width_threshold && height >= dump_vram_write_height_threshold;
-    }
+    ALWAYS_INLINE void UpdateDumpingEnabled() { enable_dumping = dump_backgrounds || dump_textures; }
   } texture_replacements;
 
   // TODO: Controllers, memory cards, etc.

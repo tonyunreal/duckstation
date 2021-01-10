@@ -15,22 +15,6 @@ Log_SetChannel(TextureReplacements);
 
 TextureReplacements g_texture_replacements;
 
-static constexpr u32 RGBA5551ToRGBA8888(u16 color)
-{
-  u8 r = Truncate8(color & 31);
-  u8 g = Truncate8((color >> 5) & 31);
-  u8 b = Truncate8((color >> 10) & 31);
-  u8 a = Truncate8((color >> 15) & 1);
-
-  // 00012345 -> 1234545
-  b = (b << 3) | (b & 0b111);
-  g = (g << 3) | (g & 0b111);
-  r = (r << 3) | (r & 0b111);
-  a = a ? 255 : 0;
-
-  return ZeroExtend32(r) | (ZeroExtend32(g) << 8) | (ZeroExtend32(b) << 16) | (ZeroExtend32(a) << 24);
-}
-
 std::string TextureReplacementHash::ToString() const
 {
   return StringUtil::StdStringFromFormat("%" PRIx64 "%" PRIx64, high, low);
@@ -75,7 +59,155 @@ const TextureReplacementTexture* TextureReplacements::GetVRAMWriteReplacement(u3
   return LoadTexture(it->second);
 }
 
-void TextureReplacements::DumpVRAMWrite(u32 width, u32 height, const void* pixels)
+void TextureReplacements::AddVRAMWrite(u32 x, u32 y, u32 width, u32 height, const void* pixels)
+{
+  if (width >= g_settings.texture_replacements.dump_vram_write_width_threshold &&
+      height >= g_settings.texture_replacements.dump_vram_write_height_threshold)
+  {
+    DumpVRAMWriteForDisplay(width, height, pixels);
+  }
+
+  // TODO: oversized copies
+  if ((x + width) > VRAM_WIDTH || (y + height) > VRAM_HEIGHT)
+  {
+    Log_ErrorPrintf("Skipping %ux%u oversized write to %u,%u", width, height, x, y);
+    return;
+  }
+
+  // purge overlapping copies
+  const Common::Rectangle<u32> rect(x, y, x + width, y + height);
+  for (auto iter = m_pending_vram_writes.begin(); iter != m_pending_vram_writes.end();)
+  {
+    PendingVRAMWrite& pvw = *iter;
+    if (!pvw.rect.Intersects(rect))
+    {
+      ++iter;
+      continue;
+    }
+
+    if (CanDumpPendingVRAMWrite(pvw, true))
+      DumpVRAMWriteForTexture(pvw);
+
+    iter = m_pending_vram_writes.erase(iter);
+  }
+
+  for (u32 row = 0; row < height; row++)
+  {
+    u16* dst = &m_vram_shadow[(y + row) * VRAM_WIDTH + x];
+    const u8* src = reinterpret_cast<const u8*>(pixels) + ((row * width) * sizeof(u16));
+    std::memcpy(dst, src, sizeof(u16) * width);
+  }
+
+  PendingVRAMWrite vrw;
+  vrw.hash = GetVRAMWriteHash(width, height, pixels);
+  vrw.rect.Set(x, y, x + width, y + height);
+  vrw.palette_values.resize(width * height, PendingVRAMWrite::PixelValue::InvalidValue());
+  m_pending_vram_writes.push_back(std::move(vrw));
+}
+
+void TextureReplacements::AddDraw(u16 draw_mode, u16 palette, u32 min_uv_x, u32 min_uv_y, u32 max_uv_x, u32 max_uv_y)
+{
+  const GPUDrawModeReg drawmode_reg{draw_mode};
+  const GPUTextureMode texture_mode = drawmode_reg.texture_mode;
+  const u32 page_x = drawmode_reg.GetTexturePageBaseX();
+  const u32 page_y = drawmode_reg.GetTexturePageBaseY();
+
+  u32 min_uv_x_vram = min_uv_x;
+  u32 max_uv_x_vram = max_uv_x;
+  switch (texture_mode)
+  {
+    case GPUTextureMode::Palette4Bit:
+      min_uv_x_vram = (min_uv_x + 3) / 4;
+      max_uv_x_vram = (max_uv_x + 3) / 4;
+      break;
+
+    case GPUTextureMode::Palette8Bit:
+      min_uv_x_vram = (min_uv_x + 1) / 2;
+      max_uv_x_vram = (max_uv_x + 1) / 2;
+      break;
+
+    default:
+      break;
+  }
+
+  const Common::Rectangle<u32> uv_rect(page_x + min_uv_x_vram, page_y + min_uv_y, page_x + max_uv_x_vram + 1u,
+                                       page_y + max_uv_y + 1u);
+  const GPUTexturePaletteReg palette_reg{palette};
+  const u32 palette_x = palette_reg.GetXBase();
+  const u32 palette_y = palette_reg.GetYBase();
+
+  PendingVRAMWrite::PixelValue ppv{};
+  ppv.Set(palette_x, palette_y, texture_mode);
+
+  for (auto iter = m_pending_vram_writes.begin(); iter != m_pending_vram_writes.end();)
+  {
+    PendingVRAMWrite& pvw = *iter;
+    if (!pvw.rect.Intersects(uv_rect))
+    {
+      ++iter;
+      continue;
+    }
+
+    Common::Rectangle<u32> cropped = pvw.rect;
+    if (cropped.left < uv_rect.left)
+      cropped.left += (uv_rect.left - cropped.left);
+    if (cropped.right > uv_rect.right)
+      cropped.right -= (cropped.right - uv_rect.right);
+    if (cropped.top < uv_rect.top)
+      cropped.top += (uv_rect.top - cropped.top);
+    if (cropped.bottom > uv_rect.bottom)
+      cropped.bottom -= (cropped.bottom - uv_rect.bottom);
+
+    const u32 left_in_write = cropped.left - pvw.rect.left;
+    const u32 top_in_write = cropped.top - pvw.rect.top;
+    const u32 right_in_write = cropped.right - pvw.rect.left;
+    const u32 bottom_in_write = cropped.bottom - pvw.rect.top;
+
+    const u32 stride = pvw.rect.GetWidth();
+    for (u32 row = top_in_write; row < bottom_in_write; row++)
+    {
+      PendingVRAMWrite::PixelValue* pvp = &pvw.palette_values[row * stride];
+      for (u32 col = left_in_write; col < right_in_write; col++)
+      {
+        if (!pvp[col].IsValid())
+          pvp[col].bits = ppv.bits;
+      }
+    }
+
+    if (CanDumpPendingVRAMWrite(pvw, false))
+    {
+      DumpVRAMWriteForTexture(pvw);
+      iter = m_pending_vram_writes.erase(iter);
+    }
+    else
+    {
+      ++iter;
+    }
+  }
+}
+
+std::optional<GPUTextureMode> TextureReplacements::GetTextureDumpMode(const PendingVRAMWrite& vrw) const
+{
+  GPUTextureMode mode = GPUTextureMode::Disabled;
+  for (const PendingVRAMWrite::PixelValue& pv : vrw.palette_values)
+  {
+    if (!pv.IsValid() || pv.mode == mode)
+      continue;
+
+    if (mode == GPUTextureMode::Disabled)
+    {
+      mode = pv.mode;
+      continue;
+    }
+
+    Log_ErrorPrintf("VRAM write has multiple texture modes");
+    return std::nullopt;
+  }
+
+  return mode;
+}
+
+void TextureReplacements::DumpVRAMWriteForDisplay(u32 width, u32 height, const void* pixels)
 {
   std::string filename = GetVRAMWriteDumpFilename(width, height, pixels);
   if (filename.empty())
@@ -95,7 +227,7 @@ void TextureReplacements::DumpVRAMWrite(u32 width, u32 height, const void* pixel
     }
   }
 
-  if (g_settings.texture_replacements.dump_vram_write_force_alpha_channel)
+  if (g_settings.texture_replacements.dump_force_alpha_channel)
   {
     for (u32 y = 0; y < height; y++)
     {
@@ -109,11 +241,169 @@ void TextureReplacements::DumpVRAMWrite(u32 width, u32 height, const void* pixel
     Log_ErrorPrintf("Failed to dump %ux%u VRAM write to '%s'", width, height, filename.c_str());
 }
 
+bool TextureReplacements::CanDumpPendingVRAMWrite(const PendingVRAMWrite& vrw, bool invalidating)
+{
+  const u32 total_pixels = vrw.rect.GetWidth() * vrw.rect.GetHeight();
+  const u32 valid_pixels =
+    static_cast<u32>(std::count_if(vrw.palette_values.begin(), vrw.palette_values.end(),
+                                   [](const PendingVRAMWrite::PixelValue& pv) { return pv.IsValid(); }));
+  const u32 percent = (valid_pixels * 100) / total_pixels;
+  const u32 threshold = invalidating ? 10 : 80;
+  return (percent >= threshold);
+}
+
+template<u32 size>
+static constexpr std::array<u16, size> MakeGreyscalePalette()
+{
+  const u16 increment = static_cast<u16>(256u / size);
+  u16 value = 0;
+  std::array<u16, size> colours{};
+  for (u32 i = 0; i < size; i++)
+  {
+    colours[i] = (value) | (value << 5) | (value << 10);
+    value += increment;
+  }
+
+  return colours;
+}
+
+void TextureReplacements::DumpVRAMWriteForTexture(const PendingVRAMWrite& vrw)
+{
+  std::string filename = GetTextureDumpFilename(vrw);
+  if (filename.empty())
+    return;
+
+  std::optional<GPUTextureMode> mode = GetTextureDumpMode(vrw);
+  if (!mode.has_value())
+    return;
+
+  Common::RGBA8Image image;
+
+  switch (mode.value())
+  {
+    case GPUTextureMode::Palette4Bit:
+    {
+      static constexpr std::array<u16, 16> fallback_palette = MakeGreyscalePalette<16>();
+
+      const u32 left = vrw.rect.left;
+      const u32 top = vrw.rect.top;
+      const u32 stride = vrw.rect.GetWidth();
+      const u32 width = stride * 4;
+      const u32 height = vrw.rect.GetHeight();
+      image.SetSize(width, height);
+
+      for (u32 y = 0; y < height; y++)
+      {
+        const PendingVRAMWrite::PixelValue* pvs = &vrw.palette_values[y * stride];
+        const u16* vram = &m_vram_shadow[((top + y) * VRAM_WIDTH) + left];
+
+        for (u32 x = 0; x < width; x++)
+        {
+          const PendingVRAMWrite::PixelValue& pv = pvs[x / 4];
+          const u16* palette =
+            pv.IsValid() ? &m_vram_shadow[pv.palette_y * VRAM_WIDTH + pv.palette_x] : fallback_palette.data();
+          const u8 shift = Truncate8(x % 4);
+          const u8 index = Truncate8(vram[x / 4] >> ((x % 4) * 4) & 0x0F);
+          image.SetPixel(x, y, RGBA5551ToRGBA8888(palette[index]));
+        }
+      }
+    }
+    break;
+
+    case GPUTextureMode::Palette8Bit:
+    {
+      static constexpr std::array<u16, 256> fallback_palette = MakeGreyscalePalette<256>();
+
+      const u32 left = vrw.rect.left;
+      const u32 top = vrw.rect.top;
+      const u32 stride = vrw.rect.GetWidth();
+      const u32 width = stride * 2;
+      const u32 height = vrw.rect.GetHeight();
+      image.SetSize(width, height);
+
+      for (u32 y = 0; y < height; y++)
+      {
+        const PendingVRAMWrite::PixelValue* pvs = &vrw.palette_values[y * stride];
+        const u16* vram = &m_vram_shadow[((top + y) * VRAM_WIDTH) + left];
+
+        for (u32 x = 0; x < width; x++)
+        {
+          const PendingVRAMWrite::PixelValue& pv = pvs[x / 2];
+          const u16* palette =
+            pv.IsValid() ? &m_vram_shadow[pv.palette_y * VRAM_WIDTH + pv.palette_x] : fallback_palette.data();
+          const u8 shift = Truncate8(x % 2);
+          const u8 index = Truncate8(vram[x / 2] >> ((x % 2) * 8) & 0xFF);
+          image.SetPixel(x, y, RGBA5551ToRGBA8888(palette[index]));
+        }
+      }
+    }
+    break;
+
+    case GPUTextureMode::Direct16Bit:
+    {
+      const u32 left = vrw.rect.left;
+      const u32 top = vrw.rect.top;
+      const u32 width = vrw.rect.GetWidth();
+      const u32 height = vrw.rect.GetHeight();
+      image.SetSize(width, height);
+      for (u32 y = 0; y < height; y++)
+      {
+        const u16* vram = &m_vram_shadow[((top + y) * VRAM_WIDTH) + left];
+        for (u32 x = 0; x < width; x++)
+          image.SetPixel(x, y, RGBA5551ToRGBA8888(vram[x]));
+      }
+    }
+    break;
+
+    default:
+      break;
+  }
+
+  if (!image.IsValid())
+  {
+    Log_ErrorPrintf("Image invalid");
+    return;
+  }
+
+  if (g_settings.texture_replacements.dump_force_alpha_channel)
+  {
+    for (u32 y = 0; y < image.GetHeight(); y++)
+    {
+      for (u32 x = 0; x < image.GetWidth(); x++)
+        image.SetPixel(x, y, image.GetPixel(x, y) | 0xFF000000u);
+    }
+  }
+
+  Log_InfoPrintf("Dumping %ux%u texture to '%s'", image.GetWidth(), image.GetHeight(), filename.c_str());
+  if (!Common::WriteImageToFile(image, filename.c_str()))
+    Log_ErrorPrintf("Failed to dump %ux%u texture to '%s'", image.GetWidth(), image.GetHeight(), filename.c_str());
+}
+
+void TextureReplacements::DumpPendingWrites()
+{
+  for (auto iter = m_pending_vram_writes.begin(); iter != m_pending_vram_writes.end();)
+  {
+    PendingVRAMWrite& pvw = *iter;
+    if (CanDumpPendingVRAMWrite(pvw, true))
+    {
+      DumpVRAMWriteForTexture(pvw);
+      iter = m_pending_vram_writes.erase(iter);
+    }
+    else
+    {
+      ++iter;
+    }
+  }
+}
+
 void TextureReplacements::Shutdown()
 {
+  DumpPendingWrites();
+  m_pending_vram_writes.clear();
   m_texture_cache.clear();
   m_vram_write_replacements.clear();
   m_game_id.clear();
+  m_vram_shadow.fill(0);
 }
 
 std::string TextureReplacements::GetSourceDirectory() const
@@ -127,6 +417,17 @@ TextureReplacementHash TextureReplacements::GetVRAMWriteHash(u32 width, u32 heig
   return {hash.low64, hash.high64};
 }
 
+TextureReplacementHash TextureReplacements::GetVRAMHash(u32 left, u32 top, u32 width, u32 height) const
+{
+  XXH3_state_t* state = XXH3_createState();
+  for (u32 y = 0; y < height; y++)
+    XXH3_128bits_update(state, &m_vram_shadow[top * VRAM_WIDTH + left], width * sizeof(u16));
+
+  XXH128_hash_t hash = XXH3_128bits_digest(state);
+  XXH3_freeState(state);
+  return {hash.low64, hash.high64};
+}
+
 std::string TextureReplacements::GetVRAMWriteDumpFilename(u32 width, u32 height, const void* pixels) const
 {
   if (m_game_id.empty())
@@ -135,6 +436,28 @@ std::string TextureReplacements::GetVRAMWriteDumpFilename(u32 width, u32 height,
   const TextureReplacementHash hash = GetVRAMWriteHash(width, height, pixels);
   std::string filename = g_host_interface->GetUserDirectoryRelativePath("dump/textures/%s/vram-write-%s.png",
                                                                         m_game_id.c_str(), hash.ToString().c_str());
+
+  if (FileSystem::FileExists(filename.c_str()))
+    return {};
+
+  const std::string dump_directory =
+    g_host_interface->GetUserDirectoryRelativePath("dump/textures/%s", m_game_id.c_str());
+  if (!FileSystem::DirectoryExists(dump_directory.c_str()) &&
+      !FileSystem::CreateDirectory(dump_directory.c_str(), false))
+  {
+    return {};
+  }
+
+  return filename;
+}
+
+std::string TextureReplacements::GetTextureDumpFilename(const PendingVRAMWrite& vrw) const
+{
+  if (m_game_id.empty())
+    return {};
+
+  std::string filename = g_host_interface->GetUserDirectoryRelativePath("dump/textures/%s/texture-%s.png",
+                                                                        m_game_id.c_str(), vrw.hash.ToString().c_str());
 
   if (FileSystem::FileExists(filename.c_str()))
     return {};

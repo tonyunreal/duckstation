@@ -511,10 +511,10 @@ void GPU::FinishVRAMWrite()
                      m_blit_buffer.data(), true);
     }
 
-    if (g_settings.texture_replacements.ShouldDumpVRAMWrite(m_vram_transfer.width, m_vram_transfer.height))
+    if (g_settings.texture_replacements.enable_dumping)
     {
-      g_texture_replacements.DumpVRAMWrite(m_vram_transfer.width, m_vram_transfer.height,
-                                           reinterpret_cast<const u16*>(m_blit_buffer.data()));
+      g_texture_replacements.AddVRAMWrite(m_vram_transfer.x, m_vram_transfer.y, m_vram_transfer.width,
+                                          m_vram_transfer.height, reinterpret_cast<const u16*>(m_blit_buffer.data()));
     }
 
     UpdateVRAM(m_vram_transfer.x, m_vram_transfer.y, m_vram_transfer.width, m_vram_transfer.height,
