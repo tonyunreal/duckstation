@@ -78,6 +78,15 @@ public:
   /// Returns the name of the frontend.
   virtual const char* GetFrontendName() const = 0;
 
+  /// Request the frontend to exit.
+  virtual void RequestExit() = 0;
+
+  /// Runs an event next frame as part of the event loop.
+  virtual void RunLater(std::function<void()> func) = 0;
+
+  /// Loads new settings and applies them.
+  virtual void ApplySettings() = 0;
+
   virtual bool Initialize() override;
   virtual void Shutdown() override;
 
@@ -221,9 +230,6 @@ protected:
 
   CommonHostInterface();
   ~CommonHostInterface();
-
-  /// Request the frontend to exit.
-  virtual void RequestExit() = 0;
 
   /// Registers frontend-specific hotkeys.
   virtual void RegisterHotkeys();

@@ -25,6 +25,7 @@
     <ClCompile Include="cubeb_audio_stream.cpp" />
     <ClCompile Include="dinput_controller_interface.cpp" />
     <ClCompile Include="imgui_fullscreen.cpp" />
+    <ClCompile Include="fullscreen_ui.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="icon.h" />
@@ -51,6 +52,7 @@
     <ClInclude Include="cubeb_audio_stream.h" />
     <ClInclude Include="dinput_controller_interface.h" />
     <ClInclude Include="imgui_fullscreen.h" />
+    <ClInclude Include="fullscreen_ui.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="font_roboto_regular.inl" />

@@ -157,8 +157,17 @@ static ALWAYS_INLINE bool EnumChoiceButton(const char* title, const char* summar
   auto to_display_name_wrapper = [](s32 value, void* opaque) -> const char* {
     return static_cast<decltype(to_display_name_function)>(opaque)(static_cast<DataType>(value));
   };
-  return EnumChoiceButtonImpl(title, summary, &value, to_display_name_wrapper, to_display_name_function,
-                              static_cast<u32>(count));
+
+  if (EnumChoiceButtonImpl(title, summary, &value, to_display_name_wrapper, to_display_name_function,
+                           static_cast<u32>(count)))
+  {
+    *value_pointer = static_cast<DataType>(value);
+    return true;
+  }
+  else
+  {
+    return false;
+  }
 }
 
 } // namespace ImGuiFullscreen
