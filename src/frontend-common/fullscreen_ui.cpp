@@ -20,20 +20,25 @@
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
 #include "imgui_styles.h"
+#include "scmversion/scmversion.h"
 Log_SetChannel(FullscreenUI);
 
-using ImGuiFullscreen::BeginFullscreenColumnFractionWindow;
+using ImGuiFullscreen::g_large_font;
+using ImGuiFullscreen::g_medium_font;
+using ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE;
+using ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE;
+using ImGuiFullscreen::LAYOUT_SCREEN_HEIGHT;
+using ImGuiFullscreen::LAYOUT_SCREEN_WIDTH;
+
+using ImGuiFullscreen::ActiveButton;
 using ImGuiFullscreen::BeginFullscreenColumnWindow;
 using ImGuiFullscreen::BeginFullscreenWindow;
 using ImGuiFullscreen::BeginMenuButtons;
 using ImGuiFullscreen::EndFullscreenWindow;
 using ImGuiFullscreen::EndMenuButtons;
 using ImGuiFullscreen::EnumChoiceButton;
-using ImGuiFullscreen::LAYOUT_SCREEN_HEIGHT;
-using ImGuiFullscreen::LAYOUT_SCREEN_WIDTH;
 using ImGuiFullscreen::LayoutScale;
 using ImGuiFullscreen::MenuButton;
-using ImGuiFullscreen::MenuCategory;
 using ImGuiFullscreen::MenuImageButton;
 using ImGuiFullscreen::ToggleButton;
 
@@ -64,6 +69,8 @@ static void DestroyResources();
 std::unique_ptr<HostDisplayTexture> s_app_icon_texture;
 std::unique_ptr<HostDisplayTexture> s_placeholder_texture;
 std::array<std::unique_ptr<HostDisplayTexture>, static_cast<u32>(DiscRegion::Count)> s_disc_region_textures;
+std::array<std::unique_ptr<HostDisplayTexture>, static_cast<u32>(GameListCompatibilityRating::Count)>
+  s_game_compatibility_textures;
 
 //////////////////////////////////////////////////////////////////////////
 // Save State List
@@ -96,8 +103,8 @@ static HostDisplayTexture* GetGameListCover(const GameListEntry* entry);
 static HostDisplayTexture* GetCoverForCurrentGame();
 
 // Lazily populated cover images.
-static std::unordered_map<std::string, std::unique_ptr<HostDisplayTexture>> m_cover_image_map;
-static bool m_game_list_loaded = false;
+static std::unordered_map<std::string, std::unique_ptr<HostDisplayTexture>> s_cover_image_map;
+static bool s_game_list_loaded = false;
 
 //////////////////////////////////////////////////////////////////////////
 // Main
@@ -149,8 +156,8 @@ void CloseQuickMenu()
 void Shutdown()
 {
   s_save_state_selector_slots.clear();
-  m_cover_image_map.clear();
-  m_game_list_loaded = false;
+  s_cover_image_map.clear();
+  s_game_list_loaded = false;
   DestroyResources();
 
   s_settings_interface = nullptr;
@@ -229,6 +236,12 @@ bool LoadResources()
     return false;
   }
 
+  for (u32 i = 0; i < static_cast<u32>(GameListCompatibilityRating::Count); i++)
+  {
+    if (!(s_game_compatibility_textures[i] = LoadTextureResource(TinyString::FromFormat("star-%u.png", i))))
+      return false;
+  }
+
   return true;
 }
 
@@ -236,6 +249,8 @@ void DestroyResources()
 {
   s_app_icon_texture.reset();
   s_placeholder_texture.reset();
+  for (auto& tex : s_game_compatibility_textures)
+    tex.reset();
   for (auto& tex : s_disc_region_textures)
     tex.reset();
 }
@@ -274,7 +289,7 @@ std::unique_ptr<HostDisplayTexture> LoadTextureResource(const char* name)
 
 void DrawLandingWindow()
 {
-  if (BeginFullscreenColumnWindow(0.0f, 571.0f, "logo", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
+  if (BeginFullscreenColumnWindow(0.0f, 570.0f, "logo", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
     ImGui::SetCursorPos(LayoutScale(ImVec2(120.0f, 170.0f)));
     ImGui::Image(s_app_icon_texture->GetHandle(), LayoutScale(ImVec2(380.0f, 380.0f)));
@@ -327,6 +342,15 @@ void DrawLandingWindow()
       s_host_interface->RequestExit();
 
     EndMenuButtons();
+
+    SmallString version_string;
+    version_string.Format("%s (%s)", g_scm_tag_str, g_scm_branch_str);
+
+    const ImVec2 text_size = ImGui::CalcTextSize(version_string) + LayoutScale(10.0f, 10.0f);
+    ImGui::SetCursorPos(ImGui::GetWindowSize() - text_size);
+    ImGui::PushFont(g_medium_font);
+    ImGui::TextUnformatted(version_string);
+    ImGui::PopFont();
   }
 
   EndFullscreenWindow();
@@ -346,12 +370,12 @@ void DrawSettingsWindow()
     BeginMenuButtons(static_cast<u32>(titles.size()) + 1u, false);
     for (u32 i = 0; i < static_cast<u32>(titles.size()); i++)
     {
-      if (MenuCategory(titles[i], s_settings_page == static_cast<SettingsPage>(i)))
+      if (ActiveButton(titles[i], s_settings_page == static_cast<SettingsPage>(i)))
         s_settings_page = static_cast<SettingsPage>(i);
     }
 
     ImGui::SetCursorPosY(LayoutScale(670.0f));
-    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+    if (ActiveButton(ICON_FA_BACKWARD "  Back", false))
       ReturnToMainWindow();
 
     EndMenuButtons();
@@ -420,7 +444,93 @@ void DrawSettingsWindow()
         break;
 
       case SettingsPage::DisplaySettings:
-        break;
+      {
+        BeginMenuButtons(6, false);
+
+        settings_changed |=
+          EnumChoiceButton("GPU Renderer", "Chooses the backend to use for rendering the console/game visuals.",
+                           &s_settings_copy.gpu_renderer, &Settings::GetRendererDisplayName, GPURenderer::Count);
+
+        switch (s_settings_copy.gpu_renderer)
+        {
+#ifdef WIN32
+          case GPURenderer::HardwareD3D11:
+          {
+            // TODO: FIXME
+            bool use_blit_swap_chain = false;
+            settings_changed |=
+              ToggleButton("Use Blit Swap Chain",
+                           "Uses a blit presentation model instead of flipping. This may be needed on some systems.",
+                           &use_blit_swap_chain);
+          }
+          break;
+#endif
+
+          case GPURenderer::HardwareVulkan:
+          {
+            settings_changed |=
+              ToggleButton("Threaded Presentation",
+                           "Presents frames on a background thread when fast forwarding or vsync is disabled.",
+                           &s_settings_copy.gpu_threaded_presentation);
+          }
+          break;
+
+          case GPURenderer::Software:
+          {
+            settings_changed |= ToggleButton("Threaded Rendering",
+                                             "Uses a second thread for drawing graphics. Speed boost, and safe to use.",
+                                             &s_settings_copy.gpu_use_thread);
+          }
+          break;
+
+          default:
+            break;
+        }
+
+        settings_changed |= EnumChoiceButton(
+          "Aspect Ratio", "Changes the aspect ratio used to display the console's output to the screen.",
+          &s_settings_copy.display_aspect_ratio, &Settings::GetDisplayAspectRatioName, DisplayAspectRatio::Count);
+
+        settings_changed |= EnumChoiceButton(
+          "Crop Mode", "Determines how much of the area typically not visible on a consumer TV set to crop/hide.",
+          &s_settings_copy.display_crop_mode, &Settings::GetDisplayCropModeDisplayName, DisplayCropMode::Count);
+
+        settings_changed |=
+          EnumChoiceButton("Downsampling",
+                           "Downsamples the rendered image prior to displaying it. Can improve "
+                           "overall image quality in mixed 2D/3D games.",
+                           &s_settings_copy.gpu_downsample_mode, &Settings::GetDownsampleModeDisplayName,
+                           GPUDownsampleMode::Count, !s_settings_copy.IsUsingSoftwareRenderer());
+
+        settings_changed |=
+          ToggleButton("Linear Upscaling", "Uses a bilinear filter when upscaling to display, smoothing out the image.",
+                       &s_settings_copy.display_linear_filtering);
+
+        settings_changed |=
+          ToggleButton("Integer Upscaling", "Adds padding to ensure pixels are a whole number in size.",
+                       &s_settings_copy.display_integer_scaling);
+
+        settings_changed |= ToggleButton("Show OSD Messages", "Shows on-screen-display messages when events occur.",
+                                         &s_settings_copy.display_show_osd_messages);
+        settings_changed |= ToggleButton(
+          "Show Game FPS", "Shows the internal frame rate of the game in the top-right corner of the display.",
+          &s_settings_copy.display_show_fps);
+        settings_changed |= ToggleButton("Show Display FPS (VPS)",
+                                         "Shows the number of frames (or v-syncs) displayed per second by the system "
+                                         "in the top-right corner of the display.",
+                                         &s_settings_copy.display_show_vps);
+        settings_changed |= ToggleButton(
+          "Show Speed",
+          "Shows the current emulation speed of the system in the top-right corner of the display as a percentage.",
+          &s_settings_copy.display_show_speed);
+        settings_changed |=
+          ToggleButton("Show Resolution",
+                       "Shows the current rendering resolution of the system in the top-right corner of the display.",
+                       &s_settings_copy.display_show_resolution);
+
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::EnhancementSettings:
       {
@@ -453,7 +563,7 @@ void DrawSettingsWindow()
           "Scaled Dithering",
           "Scales the dithering pattern with the internal rendering resolution, making it less noticeable. "
           "Usually safe to enable.",
-          &s_settings_copy.gpu_scaled_dithering);
+          &s_settings_copy.gpu_scaled_dithering, s_settings_copy.gpu_resolution_scale > 1);
         settings_changed |= ToggleButton(
           "Widescreen Hack", "Increases the field of view from 4:3 to the chosen display aspect ratio in 3D games.",
           &s_settings_copy.gpu_widescreen_hack);
@@ -480,7 +590,7 @@ void DrawSettingsWindow()
           ToggleButton("PGXP Geometry Correction",
                        "Reduces \"wobbly\" polygons by attempting to preserve the fractional component through memory "
                        "transfers.",
-                       &s_settings_copy.gpu_pgxp_enable, s_settings_copy.gpu_pgxp_enable);
+                       &s_settings_copy.gpu_pgxp_enable);
         settings_changed |=
           ToggleButton("PGXP Texture Correction",
                        "Uses perspective-correct interpolation for texture coordinates and colors, straightening out "
@@ -520,16 +630,16 @@ void DrawQuickMenu()
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, LayoutScale(10.0f));
 
-  if (BeginFullscreenWindow(-0.5f, -0.5f, 500.0f, 430.0f, "pause_menu", HEX_TO_IMVEC4(0x212121, 240)))
+  if (BeginFullscreenWindow(-0.5f, -0.5f, 500.0f, 460.0f, "pause_menu", HEX_TO_IMVEC4(0x212121, 240)))
   {
     ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
     ImGui::Image(GetCoverForCurrentGame()->GetHandle(), LayoutScale(50.0f, 50.0f));
     ImGui::SetCursorPos(LayoutScale(90.0f, 20.0f));
-    ImGui::PushFont(ImGuiFullscreen::g_large_font);
+    ImGui::PushFont(g_large_font);
     ImGui::TextUnformatted(System::GetRunningTitle().c_str());
     ImGui::PopFont();
     ImGui::SetCursorPosX(LayoutScale(90.0f));
-    ImGui::PushFont(ImGuiFullscreen::g_medium_font);
+    ImGui::PushFont(g_medium_font);
     ImGui::TextUnformatted(System::GetRunningPath().c_str());
     ImGui::PopFont();
 
@@ -537,17 +647,17 @@ void DrawQuickMenu()
 
     BeginMenuButtons(9, false);
 
-    MenuCategory(ICON_FA_BACKWARD "  Back To Game", false);
-    MenuCategory(ICON_FA_UNDO "  Load State", false);
-    MenuCategory(ICON_FA_SAVE "  Save State", false);
-    MenuCategory(ICON_FA_FAST_FORWARD "  Fast Forward", false);
-    MenuCategory(ICON_FA_SYNC "  Reset", false);
-    MenuCategory(ICON_FA_FROWN_OPEN "  Cheats", false);
+    ActiveButton(ICON_FA_BACKWARD "  Back To Game", false);
+    ActiveButton(ICON_FA_UNDO "  Load State", false);
+    ActiveButton(ICON_FA_SAVE "  Save State", false);
+    ActiveButton(ICON_FA_FAST_FORWARD "  Fast Forward", false);
+    ActiveButton(ICON_FA_SYNC "  Reset", false);
+    ActiveButton(ICON_FA_FROWN_OPEN "  Cheats", false);
 
-    if (MenuCategory(ICON_FA_SLIDERS_H "  Settings", false))
+    if (ActiveButton(ICON_FA_SLIDERS_H "  Settings", false))
       s_current_main_window = MainWindowType::Settings;
 
-    if (MenuCategory(ICON_FA_POWER_OFF "  Exit Game", false))
+    if (ActiveButton(ICON_FA_POWER_OFF "  Exit Game", false))
       s_host_interface->PowerOffSystem();
 
     EndMenuButtons();
@@ -578,7 +688,7 @@ void InitializeSaveStateListEntry(SaveStateListEntry* li, CommonHostInterface::E
   if (ssi->global)
   {
     li->title =
-      StringUtil::StdStringFromFormat("Global Slot %d - %s##global_slot_%d", ssi->slot, ssi->title.c_str(), ssi->slot);
+      StringUtil::StdStringFromFormat("Global Save %d - %s##global_slot_%d", ssi->slot, ssi->title.c_str(), ssi->slot);
   }
   else
   {
@@ -678,13 +788,20 @@ void DrawSaveStateSelector(bool is_loading)
 
   if (BeginFullscreenColumnWindow(0.0f, 570.0f, "save_state_selector_preview", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
+    ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
+    ImGui::PushFont(g_large_font);
+    ImGui::TextUnformatted(is_loading ? ICON_FA_FOLDER_OPEN "  Load State" : ICON_FA_SAVE "  Save State");
+    ImGui::PopFont();
+
     ImGui::SetCursorPos(LayoutScale(ImVec2(85.0f, 160.0f)));
     ImGui::Image(selected_texture ? selected_texture->GetHandle() : s_placeholder_texture->GetHandle(),
                  LayoutScale(ImVec2(400.0f, 400.0f)));
 
     ImGui::SetCursorPosY(LayoutScale(670.0f));
-    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+    BeginMenuButtons(1, false);
+    if (ActiveButton(ICON_FA_BACKWARD "  Back", false))
       ReturnToMainWindow();
+    EndMenuButtons();
   }
   EndFullscreenWindow();
 }
@@ -692,36 +809,6 @@ void DrawSaveStateSelector(bool is_loading)
 void DrawGameListWindow()
 {
   const GameListEntry* selected_entry = nullptr;
-
-  if (BeginFullscreenColumnWindow(1220.0f, LAYOUT_SCREEN_WIDTH, "game_list_quick_select"))
-  {
-    const float height = 24.0f;
-    BeginMenuButtons(29, false);
-
-    ImGui::SetCursorPos(LayoutScale(ImVec2(17.0f, 4.0f)));
-    ImGui::PushFont(ImGuiFullscreen::g_large_font);
-    ImGui::TextUnformatted(ICON_KI_BUTTON_LB);
-    ImGui::PopFont();
-
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiFullscreen::UIPrimaryDisabledTextColor());
-    MenuCategory("0", false, false, height, ImGuiFullscreen::g_medium_font);
-    ImGui::PopStyleColor();
-
-    for (char letter = 'A'; letter <= 'Z'; letter++)
-    {
-      TinyString str;
-      str.Format("%c", letter);
-      MenuCategory(str, false, true, height, ImGuiFullscreen::g_medium_font);
-    }
-
-    ImGui::SetCursorPosX(LayoutScale(17.0f));
-    ImGui::PushFont(ImGuiFullscreen::g_large_font);
-    ImGui::TextUnformatted(ICON_KI_BUTTON_RB);
-    ImGui::PopFont();
-
-    EndMenuButtons();
-  }
-  EndFullscreenWindow();
 
   if (BeginFullscreenColumnWindow(450.0f, 1220.0f, "game_list_entries"))
   {
@@ -732,9 +819,17 @@ void DrawGameListWindow()
       const HostDisplayTexture* cover_texture = GetGameListCover(&entry);
       const float cover_ar =
         static_cast<float>(cover_texture->GetWidth()) / static_cast<float>(cover_texture->GetHeight());
-      if (MenuButton(entry.title.c_str(), entry.path.c_str()))
+
+      SmallString summary;
+      summary.AppendFormattedString("%s - ", entry.code.c_str());
+      summary.AppendString(System::GetTitleForPath(entry.path.c_str()));
+
+      if (MenuButton(entry.title.c_str(), summary))
       {
         // launch game
+        const std::string& path_to_launch(entry.path);
+        s_host_interface->RunLater(
+          [path_to_launch]() { s_host_interface->ResumeSystemFromState(path_to_launch.c_str(), true); });
       }
 
       if (ImGui::IsItemHovered())
@@ -756,83 +851,119 @@ void DrawGameListWindow()
 
     if (selected_entry)
     {
+      const float work_width = ImGui::GetCurrentWindow()->WorkRect.GetWidth();
       const float field_margin_y = 10.0f;
       const float start_x = 50.0f;
       const float end_x = 400.0f;
       float text_y = 425.0f;
+      float text_width;
       SmallString text;
 
-      // title
-      ImGui::PushFont(ImGuiFullscreen::g_large_font);
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE)),
-                               selected_entry->title.c_str(), nullptr, nullptr, ImVec2(0.5f, 0.0f), nullptr);
-      ImGui::PopFont();
-      text_y += ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE + field_margin_y;
+      ImGui::SetCursorPos(LayoutScale(start_x, text_y));
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, field_margin_y));
+      ImGui::BeginGroup();
 
-      ImGui::PushFont(ImGuiFullscreen::g_medium_font);
+      // title
+      ImGui::PushFont(g_large_font);
+      text_width = ImGui::CalcTextSize(selected_entry->title.c_str(), nullptr, false, work_width).x;
+      ImGui::SetCursorPosX((work_width - text_width) / 2.0f);
+      ImGui::TextWrapped("%s", selected_entry->title.c_str());
+      ImGui::PopFont();
+
+      ImGui::PushFont(g_medium_font);
 
       // code
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               selected_entry->code.c_str(), nullptr, nullptr, ImVec2(0.5f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + 25.0f;
+      text_width = ImGui::CalcTextSize(selected_entry->code.c_str(), nullptr, false, work_width).x;
+      ImGui::SetCursorPosX((work_width - text_width) / 2.0f);
+      ImGui::TextWrapped("%s", selected_entry->code.c_str());
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 15.0f);
 
       // region
-      text.Format("Region: %s", Settings::GetDiscRegionDisplayName(selected_entry->region));
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
-
-      // size
-      text.Format("Size: %.2f MB", static_cast<float>(selected_entry->total_size) / 1048576.0f);
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+      ImGui::TextUnformatted("Region: ");
+      ImGui::SameLine();
+      ImGui::Image(s_disc_region_textures[static_cast<u32>(selected_entry->region)]->GetHandle(),
+                   LayoutScale(23.0f, 16.0f));
+      ImGui::SameLine();
+      ImGui::Text(" (%s)", Settings::GetDiscRegionDisplayName(selected_entry->region));
 
       // compatibility
-      text.Format("Compatibility: %s",
-                  GameList::GetGameListCompatibilityRatingString(selected_entry->compatibility_rating));
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+      ImGui::TextUnformatted("Compatibility: ");
+      ImGui::SameLine();
+      ImGui::Image(s_game_compatibility_textures[static_cast<u32>(selected_entry->compatibility_rating)]->GetHandle(),
+                   LayoutScale(64.0f, 16.0f));
+      ImGui::SameLine();
+      ImGui::Text(" (%s)", GameList::GetGameListCompatibilityRatingString(selected_entry->compatibility_rating));
+
+      // size
+      ImGui::Text("Size: %.2f MB", static_cast<float>(selected_entry->total_size) / 1048576.0f);
 
       // TODO: last played
-      text.Format("Last Played: Never");
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+      ImGui::Text("Last Played: Never");
 
       // TODO: game settings
-      text.Format("4 Per-Game Settings Set");
-      ImGui::RenderTextClipped(base_pos + LayoutScale(ImVec2(start_x, text_y)),
-                               base_pos + LayoutScale(ImVec2(end_x, text_y + ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE)),
-                               text, nullptr, nullptr, ImVec2(0.0f, 0.0f), nullptr);
-      text_y += ImGuiFullscreen::LAYOUT_MEDIUM_FONT_SIZE + field_margin_y;
+      ImGui::Text("4 Per-Game Settings Set");
 
       ImGui::PopFont();
+
+      ImGui::EndGroup();
+      ImGui::PopStyleVar();
     }
 
     ImGui::SetCursorPosY(LayoutScale(670.0f));
-    if (MenuCategory(ICON_FA_BACKWARD "  Back", false))
+    BeginMenuButtons(1, false);
+    if (ActiveButton(ICON_FA_BACKWARD "  Back", false))
       ReturnToMainWindow();
+    EndMenuButtons();
+  }
+  EndFullscreenWindow();
+
+  if (BeginFullscreenColumnWindow(1220.0f, LAYOUT_SCREEN_WIDTH, "game_list_quick_select"))
+  {
+    const float height = 24.0f;
+    BeginMenuButtons(29, false, 0.0f, 0.0f);
+
+    ImGui::SetCursorPos(LayoutScale(ImVec2(17.0f, 4.0f)));
+    ImGui::PushFont(g_large_font);
+    ImGui::TextUnformatted(ICON_KI_BUTTON_LB);
+    ImGui::PopFont();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiFullscreen::UIPrimaryDisabledTextColor());
+    ActiveButton("0", false, false, height, g_medium_font);
+    ImGui::PopStyleColor();
+
+    for (char letter = 'A'; letter <= 'Z'; letter++)
+    {
+      TinyString str;
+      str.Format("%c", letter);
+      ActiveButton(str, false, true, height, g_medium_font);
+    }
+
+    ImGui::SetCursorPosX(LayoutScale(17.0f));
+    ImGui::PushFont(g_large_font);
+    ImGui::TextUnformatted(ICON_KI_BUTTON_RB);
+    ImGui::PopFont();
+
+    EndMenuButtons();
   }
   EndFullscreenWindow();
 }
 
 void LoadGameList()
 {
-  if (m_game_list_loaded)
+  if (s_game_list_loaded)
     return;
+
+  s_game_list_loaded = true;
 
   HostInterfaceProgressCallback cb;
   s_host_interface->GetGameList()->SetSearchDirectoriesFromSettings(*s_settings_interface);
   s_host_interface->GetGameList()->Refresh(false, false, &cb);
-  m_game_list_loaded = true;
+}
+
+void RefreshGameList()
+{
+  s_game_list_loaded = false;
+  LoadGameList();
 }
 
 void SwitchToGameList()
@@ -844,8 +975,8 @@ void SwitchToGameList()
 HostDisplayTexture* GetGameListCover(const GameListEntry* entry)
 {
   // lookup and grab cover image
-  auto cover_it = m_cover_image_map.find(entry->path);
-  if (cover_it == m_cover_image_map.end())
+  auto cover_it = s_cover_image_map.find(entry->path);
+  if (cover_it == s_cover_image_map.end())
   {
     const std::string cover_path(s_host_interface->GetGameList()->GetCoverImagePathForEntry(entry));
     std::unique_ptr<HostDisplayTexture> texture;
@@ -867,7 +998,7 @@ HostDisplayTexture* GetGameListCover(const GameListEntry* entry)
       }
     }
 
-    cover_it = m_cover_image_map.emplace(entry->path, std::move(texture)).first;
+    cover_it = s_cover_image_map.emplace(entry->path, std::move(texture)).first;
   }
 
   return cover_it->second ? cover_it->second.get() : s_placeholder_texture.get();
@@ -875,7 +1006,7 @@ HostDisplayTexture* GetGameListCover(const GameListEntry* entry)
 
 HostDisplayTexture* GetCoverForCurrentGame()
 {
-  if (!m_game_list_loaded)
+  if (!s_game_list_loaded)
     s_host_interface->RunLater(LoadGameList);
 
   const GameListEntry* entry = s_host_interface->GetGameList()->GetEntryForPath(System::GetRunningPath().c_str());

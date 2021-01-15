@@ -90,6 +90,8 @@ public:
   void AppendString(const String& appendStr);
   void AppendString(const char* appendText);
   void AppendString(const char* appendString, u32 Count);
+  void AppendString(const std::string& appendString);
+  void AppendString(const std::string_view& appendString);
 
   // append a substring of the specified string to this string
   void AppendSubString(const String& appendStr, s32 Offset = 0, s32 Count = std::numeric_limits<s32>::max());
@@ -106,6 +108,8 @@ public:
   void PrependString(const String& appendStr);
   void PrependString(const char* appendText);
   void PrependString(const char* appendString, u32 Count);
+  void PrependString(const std::string& appendStr);
+  void PrependString(const std::string_view& appendStr);
 
   // append a substring of the specified string to this string
   void PrependSubString(const String& appendStr, s32 Offset = 0, s32 Count = std::numeric_limits<s32>::max());
@@ -119,6 +123,8 @@ public:
   void InsertString(s32 offset, const String& appendStr);
   void InsertString(s32 offset, const char* appendStr);
   void InsertString(s32 offset, const char* appendStr, u32 appendStrLength);
+  void InsertString(s32 offset, const std::string& appendStr);
+  void InsertString(s32 offset, const std::string_view& appendStr);
 
   // set to formatted string
   void Format(const char* FormatString, ...);

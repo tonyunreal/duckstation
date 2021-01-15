@@ -107,7 +107,7 @@ bool UpdateLayoutScale()
   static constexpr float LAYOUT_RATIO = LAYOUT_SCREEN_WIDTH / LAYOUT_SCREEN_HEIGHT;
   const ImGuiIO& io = ImGui::GetIO();
 
-  const float menu_margin = DPIScale(20.0f);
+  const float menu_margin = DPIScale(21.0f);
   const float screen_width = io.DisplaySize.x;
   const float screen_height = io.DisplaySize.y - menu_margin;
   const float screen_ratio = screen_width / screen_height;
@@ -148,25 +148,15 @@ void EndLayout()
   ImGui::PopStyleVar(2);
 }
 
-bool BeginFullscreenColumnFractionWindow(float start_frac, float end_frac, const char* name)
-{
-  const float size_frac = end_frac - start_frac;
-  ImGui::SetNextWindowSize(LayoutScale(ImVec2(LAYOUT_SCREEN_WIDTH * size_frac, LAYOUT_SCREEN_HEIGHT)));
-  ImGui::SetNextWindowPos(
-    ImVec2(LayoutScale(LAYOUT_SCREEN_WIDTH * start_frac) + g_layout_padding_left, g_layout_padding_top));
-
-  return ImGui::Begin(name, nullptr,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize |
-                        ImGuiWindowFlags_NoBringToFrontOnFocus);
-}
-
 bool BeginFullscreenColumnWindow(float start, float end, const char* name, const ImVec4& background)
 {
   ImGui::SetNextWindowSize(LayoutScale(ImVec2(end - start, LAYOUT_SCREEN_HEIGHT)));
   ImGui::SetNextWindowPos(ImVec2(LayoutScale(start) + g_layout_padding_left, g_layout_padding_top));
 
   ImGui::PushStyleColor(ImGuiCol_WindowBg, background);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
   return ImGui::Begin(name, nullptr,
                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
@@ -185,6 +175,9 @@ bool BeginFullscreenWindow(float left, float top, float width, float height, con
   ImGui::SetNextWindowPos(ImVec2(LayoutScale(left) + g_layout_padding_left, LayoutScale(top) + g_layout_padding_top));
 
   ImGui::PushStyleColor(ImGuiCol_WindowBg, background);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
   return ImGui::Begin(name, nullptr,
                       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
@@ -194,25 +187,23 @@ bool BeginFullscreenWindow(float left, float top, float width, float height, con
 void EndFullscreenWindow()
 {
   ImGui::End();
+  ImGui::PopStyleVar(3);
   ImGui::PopStyleColor();
 }
 
-void BeginMenuButtons(u32 num_items, bool center)
+void BeginMenuButtons(u32 num_items, bool center, float x_padding, float y_padding)
 {
   s_menu_button_index = 0;
 
-  // ImGui::PushStyleColor(ImGuiCol_Button, 0xFF404040);
-  // ImGui::PushStyleColor(ImGuiCol_ButtonActive, 0xFF404040);
-  // ImGui::PushStyleColor(ImGuiCol_ButtonHovered, 0xFF101010);
-  // ImGui::PushStyleColor(ImGuiCol_Border, 0xFF0060FF);
-
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, LayoutScale(x_padding, y_padding));
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, LayoutScale(8.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, LayoutScale(1.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
   if (center)
   {
-    const float total_size = static_cast<float>(num_items) * LayoutScale(LAYOUT_MENU_BUTTON_HEIGHT);
+    const float total_size =
+      static_cast<float>(num_items) * LayoutScale(LAYOUT_MENU_BUTTON_HEIGHT + (LAYOUT_MENU_BUTTON_Y_PADDING * 2.0f));
     const float window_height = ImGui::GetWindowHeight();
     if (window_height > total_size)
       ImGui::SetCursorPosY((window_height - total_size) / 2.0f);
@@ -221,120 +212,134 @@ void BeginMenuButtons(u32 num_items, bool center)
 
 void EndMenuButtons()
 {
-  // ImGui::PopStyleColor(4);
-  ImGui::PopStyleVar(3);
+  ImGui::PopStyleVar(4);
 }
 
-// TODO: We really want clipping for all of these..
-
-bool MenuCategory(const char* title, bool is_active, bool enabled, float height, ImFont* font)
+static void GetMenuButtonFrameBounds(float height, ImVec2* pos, ImVec2* size)
 {
-  ImDrawList* dl = ImGui::GetWindowDrawList();
+  ImGuiWindow* window = ImGui::GetCurrentWindow();
+  *pos = window->DC.CursorPos;
+  *size = ImVec2(window->WorkRect.GetWidth(), LayoutScale(height) + ImGui::GetStyle().FramePadding.y * 2.0f);
+}
 
-  const auto* window = ImGui::GetCurrentWindow();
-  if (is_active)
-  {
-    const float x_pad = window->WindowBorderSize + window->WindowPadding.x;
-    const ImVec2 top_left(window->DC.CursorPos.x - x_pad, window->DC.CursorPos.y);
-    const ImVec2 bottom_right(top_left + ImVec2(window->InnerClipRect.GetWidth() + x_pad * 2.0f, LayoutScale(height)));
-    ImGui::RenderFrame(top_left, bottom_right, ImGui::GetColorU32(UIPrimaryColor()), false);
-  }
+static bool MenuButtonFrame(const char* str_id, bool enabled, float height, bool* visible, bool* hovered, ImRect* bb,
+                            ImGuiButtonFlags flags = 0)
+{
+  ImGuiWindow* window = ImGui::GetCurrentWindow();
+  if (window->SkipItems)
+    return false;
 
-  const float scaled_height = LayoutScale(height);
-  const float x_pad = ImMax(ImFloor(window->WindowPadding.x * 0.5f), window->WindowBorderSize) +
-                      ImGui::GetStyle().FrameBorderSize + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
-  const ImVec2 pos(window->DC.CursorPos + ImVec2(x_pad, window->WindowBorderSize));
-  const ImVec2 size(window->InnerClipRect.GetWidth() - x_pad * 3.0f, scaled_height);
-  const ImRect bb(pos, pos + size);
+  ImVec2 pos, size;
+  GetMenuButtonFrameBounds(height, &pos, &size);
+  *bb = ImRect(pos, pos + size);
 
-  bool pressed, hovered, held;
+  const ImGuiID id = window->GetID(str_id);
+  ImGui::ItemSize(size);
   if (enabled)
   {
-    pressed = ImGui::InvisibleButton(title, size);
-    hovered = ImGui::IsItemHovered();
-    held = ImGui::IsItemActive();
+    if (!ImGui::ItemAdd(*bb, id))
+    {
+      *visible = false;
+      *hovered = false;
+      return false;
+    }
   }
   else
   {
-    ImGui::ItemSize(ImGui::CalcItemSize(size, 0.0f, 0.0f));
+    if (ImGui::IsClippedEx(*bb, id, false))
+    {
+      *visible = false;
+      *hovered = false;
+      return false;
+    }
+  }
 
+  *visible = true;
+
+  bool held;
+  bool pressed;
+  if (enabled)
+  {
+    pressed = ImGui::ButtonBehavior(*bb, id, hovered, &held, flags);
+    if (*hovered)
+    {
+      const ImU32 col = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+      ImGui::RenderFrame(bb->Min, bb->Max, col, true, 0.0f);
+    }
+  }
+  else
+  {
     pressed = false;
-    hovered = false;
     held = false;
   }
 
-  if (hovered)
+  const ImGuiStyle& style = ImGui::GetStyle();
+  bb->Min += style.FramePadding;
+  bb->Max -= style.FramePadding;
+
+  return pressed;
+}
+
+bool ActiveButton(const char* title, bool is_active, bool enabled, float height, ImFont* font)
+{
+  if (is_active)
   {
-    const ImU32 col = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-    ImGui::RenderFrame(bb.Min, bb.Max, col, true, 0.0f);
+    ImVec2 pos, size;
+    GetMenuButtonFrameBounds(height, &pos, &size);
+    ImGui::RenderFrame(pos, pos + size, ImGui::GetColorU32(UIPrimaryColor()), false);
   }
 
-  const ImRect title_bb(PadRect(
-    ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y), pos + ImVec2(size.x, LayoutScale(50.0f))),
-    LayoutScale(4.0f)));
-  const ImRect summary_bb(
-    PadRect(ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y + LayoutScale(32.0f)),
-                   pos + ImVec2(size.x, size.y)),
-            LayoutScale(4.0f)));
+  ImRect bb;
+  bool visible, hovered;
+  bool pressed = MenuButtonFrame(title, enabled, height, &visible, &hovered, &bb);
+  if (!visible)
+    return false;
+
+  const ImRect title_bb(bb.GetTL(), bb.GetBR());
+
+  if (!enabled)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
   ImGui::PushFont(font);
   ImGui::RenderTextClipped(title_bb.Min, title_bb.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &title_bb);
   ImGui::PopFont();
 
+  if (!enabled)
+    ImGui::PopStyleColor();
+
   s_menu_button_index++;
   return pressed;
 }
 
-bool MenuButton(const char* title, const char* summary)
+bool MenuButton(const char* title, const char* summary, bool enabled, float height, ImFont* font, ImFont* summary_font)
 {
-  ImDrawList* dl = ImGui::GetWindowDrawList();
+  ImRect bb;
+  bool visible, hovered;
+  bool pressed = MenuButtonFrame(title, enabled, height, &visible, &hovered, &bb);
+  if (!visible)
+    return false;
 
-  const auto* window = ImGui::GetCurrentWindow();
-  const float item_height = LAYOUT_MENU_BUTTON_HEIGHT;
-  const float x_pad = ImMax(ImFloor(window->WindowPadding.x * 0.5f), window->WindowBorderSize) +
-                      ImGui::GetStyle().FrameBorderSize + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
-  const ImVec2 pos(window->DC.CursorPos + ImVec2(x_pad, window->WindowBorderSize));
-  const ImVec2 size(window->InnerClipRect.GetWidth() - x_pad * 3.0f, LayoutScale(item_height));
-  const ImRect bb(pos, pos + size);
+  const float midpoint = bb.Min.y + font->FontSize + LayoutScale(4.0f);
+  const ImRect title_bb(bb.Min, ImVec2(bb.Max.x, midpoint));
+  const ImRect summary_bb(ImVec2(bb.Min.x, midpoint), bb.Max);
 
-  const bool pressed = ImGui::InvisibleButton(title, size);
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
+  if (!enabled)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
-  const ImU32 line_col = ImGui::GetColorU32(ImGuiCol_Button);
-  const float line_height = LayoutScale(1.0f);
-#if 0
-  if (s_menu_button_index == 0)
-    dl->AddLine(bb.GetTL(), bb.GetTR(), line_col, line_height);
-
-  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y), ImVec2(bb.Max.x, bb.Max.y), line_col, line_height);
-#endif
-
-  if (hovered)
-  {
-    const ImU32 col = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-    ImGui::RenderFrame(bb.Min, bb.Max, col, true, 0.0f);
-  }
-
-  const ImRect title_bb(PadRect(
-    ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y), pos + ImVec2(size.x, LayoutScale(50.0f))),
-    LayoutScale(4.0f)));
-  const ImRect summary_bb(
-    PadRect(ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y + LayoutScale(32.0f)),
-                   pos + ImVec2(size.x, size.y)),
-            LayoutScale(4.0f)));
-
-  ImGui::PushFont(g_large_font);
+  ImGui::PushFont(font);
   ImGui::RenderTextClipped(title_bb.Min, title_bb.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &title_bb);
   ImGui::PopFont();
 
   if (summary)
   {
-    ImGui::PushFont(g_medium_font);
+    ImGui::PushFont(summary_font);
     ImGui::RenderTextClipped(summary_bb.Min, summary_bb.Max, summary, nullptr, nullptr, ImVec2(0.0f, 0.0f),
                              &summary_bb);
     ImGui::PopFont();
   }
+
+  if (!enabled)
+    ImGui::PopStyleColor();
 
   s_menu_button_index++;
   return pressed;
@@ -401,69 +406,49 @@ bool MenuImageButton(const char* title, const char* summary, ImTextureID user_te
   return pressed;
 }
 
-bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled)
+bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled, float height, ImFont* font,
+                  ImFont* summary_font)
 {
-  ImDrawList* dl = ImGui::GetWindowDrawList();
+  ImRect bb;
+  bool visible, hovered;
+  bool pressed = MenuButtonFrame(title, enabled, height, &visible, &hovered, &bb, ImGuiButtonFlags_PressedOnClick);
+  if (!visible)
+    return false;
 
-  const auto* window = ImGui::GetCurrentWindow();
-  const float x_pad = ImMax(ImFloor(window->WindowPadding.x * 0.5f), window->WindowBorderSize) +
-                      ImGui::GetStyle().FrameBorderSize + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
-  const ImVec2 pos(window->DC.CursorPos + ImVec2(x_pad, window->WindowBorderSize));
-  const ImVec2 size(window->InnerClipRect.GetWidth() - x_pad * 3.0f, LayoutScale(LAYOUT_MENU_BUTTON_HEIGHT));
-  const ImRect bb(pos, pos + size);
+  const float midpoint = bb.Min.y + font->FontSize + LayoutScale(4.0f);
+  const ImRect title_bb(bb.Min, ImVec2(bb.Max.x, midpoint));
+  const ImRect summary_bb(ImVec2(bb.Min.x, midpoint), bb.Max);
 
-  const bool pressed = ImGui::InvisibleButton(title, size);
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
+  if (!enabled)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
-  const ImU32 line_col = ImGui::GetColorU32(ImGuiCol_Button);
-  const float line_height = LayoutScale(1.0f);
-
-#if 0
-  if (s_menu_button_index == 0)
-    dl->AddLine(bb.GetTL(), bb.GetTR(), line_col, line_height);
-
-  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y), ImVec2(bb.Max.x, bb.Max.y), line_col, line_height);
-#endif
-
-  if (hovered)
-  {
-    const ImU32 col = ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive :
-                                                             hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-    ImGui::RenderFrame(bb.Min, bb.Max, col, true, 0.0f);
-  }
-
-  const ImRect title_bb(PadRect(
-    ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y), pos + ImVec2(size.x, LayoutScale(50.0f))),
-    LayoutScale(4.0f)));
-  const ImRect summary_bb(
-    PadRect(ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y + LayoutScale(32.0f)),
-                   pos + ImVec2(size.x, size.y)),
-            LayoutScale(4.0f)));
-
-  ImGui::PushFont(g_large_font);
+  ImGui::PushFont(font);
   ImGui::RenderTextClipped(title_bb.Min, title_bb.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &title_bb);
   ImGui::PopFont();
 
   if (summary)
   {
-    ImGui::PushFont(g_medium_font);
+    ImGui::PushFont(summary_font);
     ImGui::RenderTextClipped(summary_bb.Min, summary_bb.Max, summary, nullptr, nullptr, ImVec2(0.0f, 0.0f),
                              &summary_bb);
     ImGui::PopFont();
   }
+
+  if (!enabled)
+    ImGui::PopStyleColor();
 
   const float toggle_width = LayoutScale(50.0f);
   const float toggle_height = LayoutScale(25.0f);
   const float toggle_x = LayoutScale(8.0f);
   const float toggle_y = (LayoutScale(LAYOUT_MENU_BUTTON_HEIGHT) - toggle_height) * 0.5f;
   const float toggle_radius = toggle_height * 0.5f;
-  const ImVec2 toggle_pos(pos.x + size.x - toggle_width - toggle_x, pos.y + toggle_y);
+  const ImVec2 toggle_pos(bb.Max.x - toggle_width - toggle_x, bb.Min.y + toggle_y);
 
-  if (ImGui::IsItemClicked())
+  if (pressed)
     *v = !*v;
 
   float t = *v ? 1.0f : 0.0f;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
   ImGuiContext& g = *GImGui;
   float ANIM_SPEED = 0.08f;
   if (g.LastActiveId == g.CurrentWindow->GetID(title)) // && g.LastActiveIdTimer < ANIM_SPEED)
@@ -473,7 +458,9 @@ bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled)
   }
 
   ImU32 col_bg;
-  if (ImGui::IsItemHovered())
+  if (!enabled)
+    col_bg = IM_COL32(0x75, 0x75, 0x75, 0xff);
+  else if (hovered)
     col_bg = ImGui::GetColorU32(ImLerp(HEX_TO_IMVEC4(0x9e9e9e, 0xff), UISecondaryLightColor(), t));
   else
     col_bg = ImGui::GetColorU32(ImLerp(HEX_TO_IMVEC4(0x757575, 0xff), UISecondaryLightColor(), t));
@@ -488,79 +475,103 @@ bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled)
   return pressed;
 }
 
-bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_pointer,
-                          const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count)
+bool SpinButton(const char* title, const char* summary, const char* suffix, s32* value, s32 min, s32 max, s32 increment,
+                bool enabled /*= true*/, float height /*= LAYOUT_MENU_BUTTON_HEIGHT*/, ImFont* font /*= g_large_font*/,
+                ImFont* summary_font /*= g_medium_font*/)
 {
-  ImDrawList* dl = ImGui::GetWindowDrawList();
+  ImRect bb;
+  bool visible, hovered;
+  bool pressed = MenuButtonFrame(title, enabled, height, &visible, &hovered, &bb);
+  if (!visible)
+    return false;
 
-  const auto* window = ImGui::GetCurrentWindow();
-  const float item_height = LAYOUT_MENU_BUTTON_HEIGHT;
-  const float x_pad = ImMax(ImFloor(window->WindowPadding.x * 0.5f), window->WindowBorderSize) +
-                      ImGui::GetStyle().FrameBorderSize + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
-  const ImVec2 pos(window->DC.CursorPos + ImVec2(x_pad, window->WindowBorderSize));
-  const ImVec2 size(window->InnerClipRect.GetWidth() - x_pad * 3.0f, LayoutScale(item_height));
-  const ImRect bb(pos, pos + size);
+  TinyString value_text;
+  value_text.Format("%d%s", *value, suffix);
+  const ImVec2 value_size(ImGui::CalcTextSize(value_text));
 
-  const bool pressed = ImGui::InvisibleButton(title, size);
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
+  const float midpoint = bb.Min.y + font->FontSize + LayoutScale(4.0f);
+  const float text_end = bb.Max.x - value_size.x;
+  const ImRect title_bb(bb.Min, ImVec2(text_end, midpoint));
+  const ImRect summary_bb(ImVec2(bb.Min.x, midpoint), ImVec2(text_end, bb.Max.y));
 
-  const ImU32 line_col = ImGui::GetColorU32(ImGuiCol_Button);
-  const float line_height = LayoutScale(1.0f);
-#if 0
-  if (s_menu_button_index == 0)
-    dl->AddLine(bb.GetTL(), bb.GetTR(), line_col, line_height);
+  if (!enabled)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
 
-  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y), ImVec2(bb.Max.x, bb.Max.y), line_col, line_height);
-#endif
-
-  if (hovered)
-  {
-    const ImU32 col = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
-    ImGui::RenderFrame(bb.Min, bb.Max, col, true, 0.0f);
-  }
-
-  const ImRect title_bb(PadRect(
-    ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y), pos + ImVec2(size.x, LayoutScale(50.0f))),
-    LayoutScale(4.0f)));
-  const ImRect summary_bb(
-    PadRect(ImRect(ImVec2(pos.x + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), pos.y + LayoutScale(32.0f)),
-                   pos + ImVec2(size.x, size.y)),
-            LayoutScale(4.0f)));
-
-  ImGui::PushFont(g_large_font);
+  ImGui::PushFont(font);
   ImGui::RenderTextClipped(title_bb.Min, title_bb.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &title_bb);
-  ImGui::RenderTextClipped(title_bb.Min, summary_bb.Max, to_display_name_function(*value_pointer, opaque), nullptr,
-                           nullptr, ImVec2(1.0f, 0.5f), &bb);
+  ImGui::RenderTextClipped(bb.Min, bb.Max, value_text, nullptr, nullptr, ImVec2(1.0f, 0.5f), &bb);
   ImGui::PopFont();
 
   if (summary)
   {
-    ImGui::PushFont(g_medium_font);
+    ImGui::PushFont(summary_font);
     ImGui::RenderTextClipped(summary_bb.Min, summary_bb.Max, summary, nullptr, nullptr, ImVec2(0.0f, 0.0f),
                              &summary_bb);
     ImGui::PopFont();
   }
+
+  if (!enabled)
+    ImGui::PopStyleColor();
+}
+
+bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_pointer,
+                          const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count,
+                          bool enabled, float height, ImFont* font, ImFont* summary_font)
+{
+  ImRect bb;
+  bool visible, hovered;
+  bool pressed = MenuButtonFrame(title, enabled, height, &visible, &hovered, &bb);
+  if (!visible)
+    return false;
+
+  const char* value_text = to_display_name_function(*value_pointer, opaque);
+  const ImVec2 value_size(ImGui::CalcTextSize(value_text));
+
+  const float midpoint = bb.Min.y + font->FontSize + LayoutScale(4.0f);
+  const float text_end = bb.Max.x - value_size.x;
+  const ImRect title_bb(bb.Min, ImVec2(text_end, midpoint));
+  const ImRect summary_bb(ImVec2(bb.Min.x, midpoint), ImVec2(text_end, bb.Max.y));
+
+  if (!enabled)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+
+  ImGui::PushFont(font);
+  ImGui::RenderTextClipped(title_bb.Min, title_bb.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &title_bb);
+  ImGui::RenderTextClipped(bb.Min, bb.Max, value_text, nullptr, nullptr, ImVec2(1.0f, 0.5f), &bb);
+  ImGui::PopFont();
+
+  if (summary)
+  {
+    ImGui::PushFont(summary_font);
+    ImGui::RenderTextClipped(summary_bb.Min, summary_bb.Max, summary, nullptr, nullptr, ImVec2(0.0f, 0.0f),
+                             &summary_bb);
+    ImGui::PopFont();
+  }
+
+  if (!enabled)
+    ImGui::PopStyleColor();
 
   TinyString popup_name;
   popup_name.Format("%s_popup", title);
   if (pressed)
     ImGui::OpenPopup(popup_name);
 
-  const ImGuiStyle& style = ImGui::GetStyle();
-  ImGui::SetNextWindowSize(
-    ImVec2(LayoutScale(500.0f), LayoutScale(LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY * static_cast<float>(count)) +
-                                  (style.WindowPadding.y * 2.0f) + style.WindowBorderSize));
+  const float x_padding = LAYOUT_MENU_BUTTON_X_PADDING;
+  const float y_padding = LAYOUT_MENU_BUTTON_Y_PADDING;
+  const float max_height = 500.0f;
+  const float window_height = LayoutScale(
+    std::min(max_height, (LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY + y_padding * 2.0f) * static_cast<float>(count)));
+  ImGui::SetNextWindowSize(ImVec2(LayoutScale(500.0f), window_height));
 
   bool changed = false;
   if (ImGui::BeginPopupModal(popup_name, nullptr,
                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                ImGuiWindowFlags_NoMove))
   {
-    BeginMenuButtons(static_cast<u32>(count), false);
+    BeginMenuButtons(static_cast<u32>(count), false, x_padding, y_padding);
     for (s32 i = 0; i < static_cast<s32>(count); i++)
     {
-      if (MenuCategory(to_display_name_function(i, opaque), i == *value_pointer))
+      if (ActiveButton(to_display_name_function(i, opaque), i == *value_pointer))
       {
         *value_pointer = i;
         changed = true;
@@ -569,7 +580,6 @@ bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_poi
     }
 
     EndMenuButtons();
-
     ImGui::EndPopup();
   }
 

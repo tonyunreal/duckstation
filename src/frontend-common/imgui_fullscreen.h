@@ -12,9 +12,10 @@ static constexpr float LAYOUT_SCREEN_HEIGHT = 720.0f;
 static constexpr float LAYOUT_LARGE_FONT_SIZE = 26.0f;
 static constexpr float LAYOUT_MEDIUM_FONT_SIZE = 16.0f;
 static constexpr float LAYOUT_SMALL_FONT_SIZE = 10.0f;
-static constexpr float LAYOUT_MENU_BUTTON_HEIGHT = 60.0f;
-static constexpr float LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY = 40.0f;
-static constexpr float LAYOUT_MENU_BUTTON_X_PADDING = 4.0f;
+static constexpr float LAYOUT_MENU_BUTTON_HEIGHT = 50.0f;
+static constexpr float LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY = 26.0f;
+static constexpr float LAYOUT_MENU_BUTTON_X_PADDING = 15.0f;
+static constexpr float LAYOUT_MENU_BUTTON_Y_PADDING = 10.0f;
 
 extern ImFont* g_standard_font;
 extern ImFont* g_medium_font;
@@ -130,28 +131,36 @@ bool UpdateLayoutScale();
 void BeginLayout();
 void EndLayout();
 
-bool BeginFullscreenColumnFractionWindow(float start_frac, float end_frac, const char* name);
-
 bool BeginFullscreenColumnWindow(float start, float end, const char* name,
                                  const ImVec4& background = HEX_TO_IMVEC4(0x212121, 0xFF));
 bool BeginFullscreenWindow(float left, float top, float width, float height, const char* name,
                            const ImVec4& background = HEX_TO_IMVEC4(0x212121, 0xFF));
 void EndFullscreenWindow();
 
-void BeginMenuButtons(u32 num_items, bool center);
+void BeginMenuButtons(u32 num_items, bool center, float x_padding = LAYOUT_MENU_BUTTON_X_PADDING,
+                      float y_padding = LAYOUT_MENU_BUTTON_Y_PADDING);
 void EndMenuButtons();
-bool MenuCategory(const char* title, bool is_active, bool enabled = true,
+bool ActiveButton(const char* title, bool is_active, bool enabled = true,
                   float height = LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY, ImFont* font = g_large_font);
-bool MenuButton(const char* title, const char* summary = nullptr);
+bool MenuButton(const char* title, const char* summary, bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT,
+                ImFont* font = g_large_font, ImFont* summary_font = g_medium_font);
 bool MenuImageButton(const char* title, const char* summary, ImTextureID user_texture_id, const ImVec2& image_size,
                      const ImVec2& uv0 = ImVec2(0.0f, 0.0f), const ImVec2& uv1 = ImVec2(1.0f, 1.0f));
-bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled = true);
+bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled = true,
+                  float height = LAYOUT_MENU_BUTTON_HEIGHT, ImFont* font = g_large_font,
+                  ImFont* summary_font = g_medium_font);
+bool SpinButton(const char* title, const char* summary, const char* suffix, s32* value, s32 min, s32 max, s32 increment,
+                bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT, ImFont* font = g_large_font,
+                ImFont* summary_font = g_medium_font);
 bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_pointer,
-                          const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count);
+                          const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count,
+                          bool enabled, float height, ImFont* font, ImFont* summary_font);
 
 template<typename DataType, typename CountType>
 static ALWAYS_INLINE bool EnumChoiceButton(const char* title, const char* summary, DataType* value_pointer,
-                                           const char* (*to_display_name_function)(DataType value), CountType count)
+                                           const char* (*to_display_name_function)(DataType value), CountType count,
+                                           bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT,
+                                           ImFont* font = g_large_font, ImFont* summary_font = g_medium_font)
 {
   s32 value = static_cast<s32>(*value_pointer);
   auto to_display_name_wrapper = [](s32 value, void* opaque) -> const char* {
@@ -159,7 +168,7 @@ static ALWAYS_INLINE bool EnumChoiceButton(const char* title, const char* summar
   };
 
   if (EnumChoiceButtonImpl(title, summary, &value, to_display_name_wrapper, to_display_name_function,
-                           static_cast<u32>(count)))
+                           static_cast<u32>(count), enabled, height, font, summary_font))
   {
     *value_pointer = static_cast<DataType>(value);
     return true;

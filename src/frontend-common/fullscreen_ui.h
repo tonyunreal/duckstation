@@ -5,8 +5,7 @@ class CommonHostInterface;
 class SettingsInterface;
 struct Settings;
 
-namespace FullscreenUI
-{
+namespace FullscreenUI {
 enum class MainWindowType
 {
   None,
@@ -41,7 +40,9 @@ void CloseQuickMenu();
 void Shutdown();
 void Render();
 
+void RefreshGameList();
+
 Settings& GetSettingsCopy();
 void SaveAndApplySettings();
 
-}
+} // namespace FullscreenUI

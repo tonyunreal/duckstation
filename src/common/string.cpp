@@ -266,6 +266,18 @@ void String::AppendString(const char* appendString, u32 Count)
     InternalAppend(appendString, Count);
 }
 
+void String::AppendString(const std::string& appendString)
+{
+  if (!appendString.empty())
+    InternalAppend(appendString.c_str(), static_cast<u32>(appendString.size()));
+}
+
+void String::AppendString(const std::string_view& appendString)
+{
+  if (!appendString.empty())
+    InternalAppend(appendString.data(), static_cast<u32>(appendString.size()));
+}
+
 void String::AppendSubString(const String& appendStr, s32 Offset /* = 0 */, s32 Count /* = INT_std::max */)
 {
   u32 appendStrLength = appendStr.GetLength();
@@ -377,6 +389,18 @@ void String::PrependString(const char* appendString, u32 Count)
 {
   if (Count > 0)
     InternalPrepend(appendString, Count);
+}
+
+void String::PrependString(const std::string& appendStr)
+{
+  if (!appendStr.empty())
+    InternalPrepend(appendStr.c_str(), static_cast<u32>(appendStr.size()));
+}
+
+void String::PrependString(const std::string_view& appendStr)
+{
+  if (!appendStr.empty())
+    InternalPrepend(appendStr.data(), static_cast<u32>(appendStr.size()));
 }
 
 void String::PrependSubString(const String& appendStr, s32 Offset /* = 0 */, s32 Count /* = INT_std::max */)
@@ -502,6 +526,16 @@ void String::InsertString(s32 offset, const char* appendStr, u32 appendStrLength
 
   // ensure null termination
   m_pStringData->pBuffer[m_pStringData->StringLength] = 0;
+}
+
+void String::InsertString(s32 offset, const std::string& appendStr)
+{
+  InsertString(offset, appendStr.c_str(), static_cast<u32>(appendStr.size()));
+}
+
+void String::InsertString(s32 offset, const std::string_view& appendStr)
+{
+  InsertString(offset, appendStr.data(), static_cast<u32>(appendStr.size()));
 }
 
 void String::Format(const char* FormatString, ...)
