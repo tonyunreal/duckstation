@@ -193,4 +193,9 @@ void OpenFileSelector(const char* title, bool select_directory, FileSelectorCall
                       FileSelectorFilters filters = FileSelectorFilters());
 void CloseFileSelector();
 
+using ChoiceDialogCallback = std::function<void(s32 index, const std::string& title, bool checked)>;
+using ChoiceDialogOptions = std::vector<std::pair<std::string, bool>>;
+void OpenChoiceDialog(const char* title, bool checkable, ChoiceDialogOptions options, ChoiceDialogCallback callback);
+void CloseChoiceDialog();
+
 } // namespace ImGuiFullscreen

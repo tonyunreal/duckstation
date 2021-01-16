@@ -15,6 +15,7 @@
 
 namespace ImGuiFullscreen {
 static void DrawFileSelector();
+static void DrawChoiceDialog();
 
 ImFont* g_standard_font = nullptr;
 ImFont* g_medium_font = nullptr;
@@ -149,6 +150,7 @@ void BeginLayout()
 void EndLayout()
 {
   DrawFileSelector();
+  DrawChoiceDialog();
 
   ImGui::PopStyleColor(5);
   ImGui::PopStyleVar(2);
@@ -173,7 +175,7 @@ bool BeginFullscreenColumns(const char* title)
   else
   {
     clipped = ImGui::Begin("fullscreen_ui_columns_parent", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+                           ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
   }
 
   return clipped;
@@ -577,6 +579,10 @@ bool SpinButton(const char* title, const char* summary, const char* suffix, s32*
     ImGui::PopStyleColor();
 }
 
+static ImGuiID s_enum_choice_button_id = 0;
+static s32 s_enum_choice_button_value = 0;
+static bool s_enum_choice_button_set = false;
+
 bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_pointer,
                           const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count,
                           bool enabled, float height, ImFont* font, ImFont* summary_font)
@@ -614,36 +620,35 @@ bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_poi
   if (!enabled)
     ImGui::PopStyleColor();
 
-  TinyString popup_name;
-  popup_name.Format("%s_popup", title);
   if (pressed)
-    ImGui::OpenPopup(popup_name);
+  {
+    s_enum_choice_button_id = ImGui::GetID(title);
+    s_enum_choice_button_value = *value_pointer;
+    s_enum_choice_button_set = false;
 
-  const float x_padding = LAYOUT_MENU_BUTTON_X_PADDING;
-  const float y_padding = LAYOUT_MENU_BUTTON_Y_PADDING;
-  const float max_height = 500.0f;
-  const float window_height = LayoutScale(
-    std::min(max_height, (LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY + y_padding * 2.0f) * static_cast<float>(count)));
-  ImGui::SetNextWindowSize(ImVec2(LayoutScale(500.0f), window_height));
+    ChoiceDialogOptions options;
+    options.reserve(count);
+    for (u32 i = 0; i < count; i++)
+      options.emplace_back(to_display_name_function(static_cast<s32>(i), opaque), *value_pointer == i);
+    OpenChoiceDialog(title, false, std::move(options), [](s32 index, const std::string& title, bool checked) {
+      if (index >= 0)
+        s_enum_choice_button_value = index;
+
+      s_enum_choice_button_set = true;
+      CloseChoiceDialog();
+    });
+  }
 
   bool changed = false;
-  if (ImGui::BeginPopupModal(popup_name, nullptr,
-                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                               ImGuiWindowFlags_NoMove))
+  if (s_enum_choice_button_set && s_enum_choice_button_id == ImGui::GetID(title))
   {
-    BeginMenuButtons(static_cast<u32>(count), false, x_padding, y_padding);
-    for (s32 i = 0; i < static_cast<s32>(count); i++)
-    {
-      if (ActiveButton(to_display_name_function(i, opaque), i == *value_pointer))
-      {
-        *value_pointer = i;
-        changed = true;
-        ImGui::CloseCurrentPopup();
-      }
-    }
+    changed = s_enum_choice_button_value != *value_pointer;
+    if (changed)
+      *value_pointer = s_enum_choice_button_value;
 
-    EndMenuButtons();
-    ImGui::EndPopup();
+    s_enum_choice_button_id = 0;
+    s_enum_choice_button_value = 0;
+    s_enum_choice_button_set = false;
   }
 
   return changed;
@@ -768,6 +773,9 @@ void OpenFileSelector(const char* title, bool select_directory, FileSelectorCall
 
 void CloseFileSelector()
 {
+  if (!s_file_selector_open)
+    return;
+
   s_file_selector_open = false;
   s_file_selector_directory = false;
   std::string().swap(s_file_selector_title);
@@ -798,11 +806,17 @@ void DrawFileSelector()
   if (ImGui::BeginPopupModal(s_file_selector_title.c_str(), &is_open,
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
   {
-    BeginMenuButtons(static_cast<u32>(s_file_selector_items.size()) + 2u, false);
+    BeginMenuButtons(static_cast<u32>(s_file_selector_items.size()) + 1u, false);
+
+    if (!s_file_selector_current_directory.empty())
+    {
+      MenuButton(TinyString::FromFormat(ICON_FA_FOLDER_OPEN "  %s", s_file_selector_current_directory.c_str()), nullptr,
+                 false, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY);
+    }
 
     if (s_file_selector_directory && !s_file_selector_current_directory.empty())
     {
-      if (MenuButton(ICON_FA_PLUS "<Use This Directory>", nullptr, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
+      if (MenuButton(ICON_FA_FOLDER_PLUS "  <Use This Directory>", nullptr, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
         directory_selected = true;
     }
 
@@ -845,6 +859,122 @@ void DrawFileSelector()
     std::string no_path;
     s_file_selector_callback(no_path);
     CloseFileSelector();
+  }
+}
+
+static bool s_choice_dialog_open = false;
+static bool s_choice_dialog_checkable = false;
+static std::string s_choice_dialog_title;
+static ChoiceDialogOptions s_choice_dialog_options;
+static ChoiceDialogCallback s_choice_dialog_callback;
+
+void OpenChoiceDialog(const char* title, bool checkable, ChoiceDialogOptions options, ChoiceDialogCallback callback)
+{
+  if (s_choice_dialog_open)
+    CloseChoiceDialog();
+
+  s_choice_dialog_open = true;
+  s_choice_dialog_checkable = checkable;
+  s_choice_dialog_title = StringUtil::StdStringFromFormat("%s##choice_dialog", title);
+  s_choice_dialog_options = std::move(options);
+  s_choice_dialog_callback = std::move(callback);
+}
+
+void CloseChoiceDialog()
+{
+  if (!s_choice_dialog_open)
+    return;
+
+  s_choice_dialog_open = false;
+  s_choice_dialog_checkable = false;
+  std::string().swap(s_choice_dialog_title);
+  ChoiceDialogOptions().swap(s_choice_dialog_options);
+  ChoiceDialogCallback().swap(s_choice_dialog_callback);
+}
+
+void DrawChoiceDialog()
+{
+  if (!s_choice_dialog_open)
+    return;
+
+  const float width = 600.0f;
+  const float title_height =
+    g_large_font->FontSize + ImGui::GetStyle().FramePadding.y * 2.0f + ImGui::GetStyle().WindowPadding.y * 2.0f;
+  const float height =
+    std::min(400.0f, title_height + (LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY + (LAYOUT_MENU_BUTTON_Y_PADDING * 2.0f)) *
+                                      static_cast<float>(s_choice_dialog_options.size()));
+  ImGui::SetNextWindowSize(LayoutScale(width, height));
+  ImGui::OpenPopup(s_choice_dialog_title.c_str());
+
+  ImGui::PushFont(g_large_font);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                      LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING, LAYOUT_MENU_BUTTON_Y_PADDING));
+
+  bool is_open = true;
+  s32 choice = -1;
+  bool choice_checked = false;
+
+  if (ImGui::BeginPopupModal(s_choice_dialog_title.c_str(), &is_open,
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
+  {
+    BeginMenuButtons(static_cast<u32>(s_choice_dialog_options.size()), false);
+
+    if (s_choice_dialog_checkable)
+    {
+      SmallString title;
+      for (s32 i = 0; i < static_cast<s32>(s_choice_dialog_options.size()); i++)
+      {
+        auto& option = s_choice_dialog_options[i];
+
+        title.Format("%s  %s", option.second ? ICON_FA_CHECK_SQUARE : ICON_FA_SQUARE, option.first.c_str());
+        if (MenuButton(title, nullptr, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
+        {
+          choice = i;
+          option.second = !option.second;
+        }
+      }
+    }
+    else
+    {
+      for (s32 i = 0; i < static_cast<s32>(s_choice_dialog_options.size()); i++)
+      {
+        auto& option = s_choice_dialog_options[i];
+        SmallString title;
+        if (option.second)
+          title.AppendString(ICON_FA_CHECK "  ");
+        title.AppendString(option.first);
+
+        if (ActiveButton(title, option.second, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
+        {
+          choice = i;
+          for (s32 j = 0; j < static_cast<s32>(s_choice_dialog_options.size()); j++)
+            s_choice_dialog_options[j].second = (j == i);
+        }
+      }
+    }
+
+    EndMenuButtons();
+
+    ImGui::EndPopup();
+  }
+  else
+  {
+    is_open = false;
+  }
+
+  ImGui::PopStyleVar(1);
+  ImGui::PopFont();
+
+  if (choice >= 0)
+  {
+    const auto& option = s_choice_dialog_options[choice];
+    s_choice_dialog_callback(choice, option.first, option.second);
+  }
+  else if (!is_open)
+  {
+    std::string no_string;
+    s_choice_dialog_callback(-1, no_string, false);
+    CloseChoiceDialog();
   }
 }
 

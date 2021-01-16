@@ -35,6 +35,8 @@ using ImGuiFullscreen::BeginFullscreenColumns;
 using ImGuiFullscreen::BeginFullscreenColumnWindow;
 using ImGuiFullscreen::BeginFullscreenWindow;
 using ImGuiFullscreen::BeginMenuButtons;
+using ImGuiFullscreen::CloseChoiceDialog;
+using ImGuiFullscreen::CloseFileSelector;
 using ImGuiFullscreen::EndFullscreenColumns;
 using ImGuiFullscreen::EndFullscreenColumnWindow;
 using ImGuiFullscreen::EndFullscreenWindow;
@@ -43,6 +45,8 @@ using ImGuiFullscreen::EnumChoiceButton;
 using ImGuiFullscreen::LayoutScale;
 using ImGuiFullscreen::MenuButton;
 using ImGuiFullscreen::MenuImageButton;
+using ImGuiFullscreen::OpenChoiceDialog;
+using ImGuiFullscreen::OpenFileSelector;
 using ImGuiFullscreen::ToggleButton;
 
 namespace FullscreenUI {
@@ -332,11 +336,11 @@ void DrawLandingWindow()
               s_host_interface->BootSystem(boot_params);
             });
           }
-          ImGuiFullscreen::CloseFileSelector();
+          CloseFileSelector();
         };
 
-        ImGuiFullscreen::OpenFileSelector(ICON_FA_COMPACT_DISC "  Select Disc Image", false, std::move(callback),
-                                          {"*.bin", "*.cue", "*.iso", "*.img", "*.chd", "*.psexe", "*.exe"});
+        OpenFileSelector(ICON_FA_COMPACT_DISC "  Select Disc Image", false, std::move(callback),
+                         {"*.bin", "*.cue", "*.iso", "*.img", "*.chd", "*.psexe", "*.exe"});
       });
       ClearImGuiFocus();
     }
@@ -379,6 +383,23 @@ void DrawLandingWindow()
   EndFullscreenColumns();
 }
 
+static ImGuiFullscreen::ChoiceDialogOptions GetGameListDirectoryOptions(bool recursive_as_checked)
+{
+  ImGuiFullscreen::ChoiceDialogOptions options;
+
+  for (std::string& dir : s_settings_interface->GetStringList("GameList", "Paths"))
+    options.emplace_back(std::move(dir), false);
+
+  for (std::string& dir : s_settings_interface->GetStringList("GameList", "RecursivePaths"))
+    options.emplace_back(std::move(dir), recursive_as_checked);
+
+  std::sort(options.begin(), options.end(), [](const auto& lhs, const auto& rhs) {
+    return (StringUtil::Strcasecmp(lhs.first.c_str(), rhs.first.c_str()) < 0);
+  });
+
+  return options;
+}
+
 void DrawSettingsWindow()
 {
   BeginFullscreenColumns();
@@ -386,9 +407,9 @@ void DrawSettingsWindow()
   if (BeginFullscreenColumnWindow(0.0f, 300.0f, "settings_category", ImVec4(0.18f, 0.18f, 0.18f, 1.00f)))
   {
     static constexpr std::array<const char*, static_cast<u32>(SettingsPage::Count)> titles = {
-      {ICON_FA_WINDOW_MAXIMIZE "  Interface Settings", ICON_FA_MICROCHIP "  BIOS Settings",
-       ICON_FA_HDD "  Console Settings", ICON_FA_GAMEPAD "  Controller Settings", ICON_FA_KEYBOARD "  Hotkey Settings",
-       ICON_FA_SD_CARD "  Memory Card Settings", ICON_FA_TV "  Display Settings",
+      {ICON_FA_WINDOW_MAXIMIZE "  Interface Settings", ICON_FA_LIST "  Game List Settings",
+       ICON_FA_HDD "  Console Settings", ICON_FA_MICROCHIP "  BIOS Settings", ICON_FA_GAMEPAD "  Controller Settings",
+       ICON_FA_KEYBOARD "  Hotkey Settings", ICON_FA_SD_CARD "  Memory Card Settings", ICON_FA_TV "  Display Settings",
        ICON_FA_MAGIC "  Enhancement Settings", ICON_FA_HEADPHONES "  Audio Settings",
        ICON_FA_EXCLAMATION_TRIANGLE "  Advanced Settings"}};
 
@@ -454,7 +475,63 @@ void DrawSettingsWindow()
       break;
 
       case SettingsPage::GameListSettings:
-        break;
+      {
+        BeginMenuButtons(4, false);
+
+        if (MenuButton(ICON_FA_FOLDER_PLUS "  Add Search Directory", "Adds a new directory to the game search list."))
+        {
+          OpenFileSelector(ICON_FA_FOLDER_PLUS "  Add Search Directory", true, [](const std::string& dir) {
+            if (!dir.empty())
+            {
+              s_settings_interface->RemoveFromStringList("GameList", "RecursivePaths", dir.c_str());
+              s_settings_interface->AddToStringList("GameList", "Paths", dir.c_str());
+            }
+
+            CloseFileSelector();
+          });
+        }
+
+        if (MenuButton(ICON_FA_FOLDER_OPEN "  Change Recursive Directories",
+                       "Sets whether subdirectories are searched for each game directory"))
+        {
+          OpenChoiceDialog(ICON_FA_FOLDER_OPEN "  Change Recursive Directories", true,
+                           GetGameListDirectoryOptions(true), [](s32 index, const std::string& title, bool checked) {
+                             if (index < 0)
+                               return;
+
+                             if (checked)
+                             {
+                               s_settings_interface->RemoveFromStringList("GameList", "Paths", title.c_str());
+                               s_settings_interface->AddToStringList("GameList", "RecursivePaths", title.c_str());
+                             }
+                             else
+                             {
+                               s_settings_interface->RemoveFromStringList("GameList", "RecursivePaths", title.c_str());
+                               s_settings_interface->AddToStringList("GameList", "Paths", title.c_str());
+                             }
+
+                             s_host_interface->RunLater(SaveAndApplySettings);
+                           });
+        }
+
+        if (MenuButton(ICON_FA_FOLDER_MINUS "  Remove Search Directory",
+                       "Removes a directory from the game search list."))
+        {
+          OpenChoiceDialog(ICON_FA_FOLDER_MINUS "  Remove Search Directory", false, GetGameListDirectoryOptions(false),
+                           [](s32 index, const std::string& title, bool checked) {
+                             if (index < 0)
+                               return;
+
+                             s_settings_interface->RemoveFromStringList("GameList", "Paths", title.c_str());
+                             s_settings_interface->RemoveFromStringList("GameList", "RecursivePaths", title.c_str());
+                             s_host_interface->RunLater(SaveAndApplySettings);
+                             CloseChoiceDialog();
+                           });
+        }
+
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::ConsoleSettings:
         break;

@@ -21,6 +21,7 @@ enum class SettingsPage
   InterfaceSettings,
   GameListSettings,
   ConsoleSettings,
+  BIOSSettings,
   ControllerSettings,
   HotkeySettings,
   MemoryCardSettings,
