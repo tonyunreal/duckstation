@@ -154,19 +154,53 @@ void EndLayout()
   ImGui::PopStyleVar(2);
 }
 
-bool BeginFullscreenColumnWindow(float start, float end, const char* name, const ImVec4& background)
+bool BeginFullscreenColumns(const char* title)
 {
-  ImGui::SetNextWindowSize(LayoutScale(ImVec2(end - start, LAYOUT_SCREEN_HEIGHT)));
-  ImGui::SetNextWindowPos(ImVec2(LayoutScale(start) + g_layout_padding_left, g_layout_padding_top));
+  ImGui::SetNextWindowPos(ImVec2(g_layout_padding_left, g_layout_padding_top));
+  ImGui::SetNextWindowSize(LayoutScale(ImVec2(LAYOUT_SCREEN_WIDTH, LAYOUT_SCREEN_HEIGHT)));
 
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, background);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
-  return ImGui::Begin(name, nullptr,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                        ImGuiWindowFlags_NoBringToFrontOnFocus);
+  bool clipped;
+  if (title)
+  {
+    ImGui::PushFont(g_large_font);
+    clipped = ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+    ImGui::PopFont();
+  }
+  else
+  {
+    clipped = ImGui::Begin("fullscreen_ui_columns_parent", nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+  }
+
+  return clipped;
+}
+
+void EndFullscreenColumns()
+{
+  ImGui::End();
+  ImGui::PopStyleVar(3);
+}
+
+bool BeginFullscreenColumnWindow(float start, float end, const char* name, const ImVec4& background)
+{
+  const ImVec2 pos(LayoutScale(start), 0.0f);
+  const ImVec2 size(LayoutScale(ImVec2(end - start, LAYOUT_SCREEN_HEIGHT)));
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+
+  ImGui::SetCursorPos(pos);
+
+  return ImGui::BeginChild(name, size, false, ImGuiWindowFlags_NavFlattened);
+}
+
+void EndFullscreenColumnWindow()
+{
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
 }
 
 bool BeginFullscreenWindow(float left, float top, float width, float height, const char* name,

@@ -134,8 +134,13 @@ void EndLayout();
 
 void DrawWindowTitle(const char* title);
 
+bool BeginFullscreenColumns(const char* title = nullptr);
+void EndFullscreenColumns();
+
 bool BeginFullscreenColumnWindow(float start, float end, const char* name,
                                  const ImVec4& background = HEX_TO_IMVEC4(0x212121, 0xFF));
+void EndFullscreenColumnWindow();
+
 bool BeginFullscreenWindow(float left, float top, float width, float height, const char* name,
                            const ImVec4& background = HEX_TO_IMVEC4(0x212121, 0xFF));
 void EndFullscreenWindow();

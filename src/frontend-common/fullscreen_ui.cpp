@@ -31,10 +31,13 @@ using ImGuiFullscreen::LAYOUT_SCREEN_HEIGHT;
 using ImGuiFullscreen::LAYOUT_SCREEN_WIDTH;
 
 using ImGuiFullscreen::ActiveButton;
+using ImGuiFullscreen::BeginFullscreenColumns;
+using ImGuiFullscreen::EndFullscreenColumns;
 using ImGuiFullscreen::BeginFullscreenColumnWindow;
+using ImGuiFullscreen::EndFullscreenColumnWindow;
 using ImGuiFullscreen::BeginFullscreenWindow;
-using ImGuiFullscreen::BeginMenuButtons;
 using ImGuiFullscreen::EndFullscreenWindow;
+using ImGuiFullscreen::BeginMenuButtons;
 using ImGuiFullscreen::EndMenuButtons;
 using ImGuiFullscreen::EnumChoiceButton;
 using ImGuiFullscreen::LayoutScale;
@@ -289,12 +292,14 @@ std::unique_ptr<HostDisplayTexture> LoadTextureResource(const char* name)
 
 void DrawLandingWindow()
 {
+  BeginFullscreenColumns();
+
   if (BeginFullscreenColumnWindow(0.0f, 570.0f, "logo", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
     ImGui::SetCursorPos(LayoutScale(ImVec2(120.0f, 170.0f)));
     ImGui::Image(s_app_icon_texture->GetHandle(), LayoutScale(ImVec2(380.0f, 380.0f)));
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
 
   if (BeginFullscreenColumnWindow(570.0f, LAYOUT_SCREEN_WIDTH, "menu"))
   {
@@ -368,11 +373,15 @@ void DrawLandingWindow()
     ImGui::PopFont();
   }
 
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
+
+  EndFullscreenColumns();
 }
 
 void DrawSettingsWindow()
 {
+  BeginFullscreenColumns();
+
   if (BeginFullscreenColumnWindow(0.0f, 300.0f, "settings_category", ImVec4(0.18f, 0.18f, 0.18f, 1.00f)))
   {
     static constexpr std::array<const char*, static_cast<u32>(SettingsPage::Count)> titles = {
@@ -396,7 +405,7 @@ void DrawSettingsWindow()
     EndMenuButtons();
   }
 
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
 
   if (BeginFullscreenColumnWindow(300.0f, LAYOUT_SCREEN_WIDTH, "settings_parent"))
   {
@@ -635,7 +644,9 @@ void DrawSettingsWindow()
       s_host_interface->RunLater(SaveAndApplySettings);
   }
 
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
+
+  EndFullscreenColumns();
 }
 
 void DrawQuickMenu()
@@ -780,6 +791,12 @@ void DrawSaveStateSelector(bool is_loading)
 {
   const HostDisplayTexture* selected_texture = s_placeholder_texture.get();
 
+  if (!BeginFullscreenColumns())
+  {
+    EndFullscreenColumns();
+    return;
+  }
+
   // drawn back the front so the hover changes the image
   if (BeginFullscreenColumnWindow(570.0f, LAYOUT_SCREEN_WIDTH, "save_state_selector_slots"))
   {
@@ -799,14 +816,14 @@ void DrawSaveStateSelector(bool is_loading)
 
     EndMenuButtons();
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
 
   if (BeginFullscreenColumnWindow(0.0f, 570.0f, "save_state_selector_preview", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
-    /*ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
+    ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
     ImGui::PushFont(g_large_font);
     ImGui::TextUnformatted(is_loading ? ICON_FA_FOLDER_OPEN "  Load State" : ICON_FA_SAVE "  Save State");
-    ImGui::PopFont();*/
+    ImGui::PopFont();
 
     ImGui::SetCursorPos(LayoutScale(ImVec2(85.0f, 160.0f)));
     ImGui::Image(selected_texture ? selected_texture->GetHandle() : s_placeholder_texture->GetHandle(),
@@ -818,12 +835,20 @@ void DrawSaveStateSelector(bool is_loading)
       ReturnToMainWindow();
     EndMenuButtons();
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
+
+  EndFullscreenColumns();
 }
 
 void DrawGameListWindow()
 {
   const GameListEntry* selected_entry = nullptr;
+
+  if (!BeginFullscreenColumns())
+  {
+    EndFullscreenColumns();
+    return;
+  }
 
   if (BeginFullscreenColumnWindow(450.0f, 1220.0f, "game_list_entries"))
   {
@@ -853,7 +878,7 @@ void DrawGameListWindow()
 
     EndMenuButtons();
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
 
   if (BeginFullscreenColumnWindow(0.0f, 450.0f, "game_list_info", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
@@ -930,7 +955,7 @@ void DrawGameListWindow()
       ReturnToMainWindow();
     EndMenuButtons();
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
 
   if (BeginFullscreenColumnWindow(1220.0f, LAYOUT_SCREEN_WIDTH, "game_list_quick_select"))
   {
@@ -960,7 +985,9 @@ void DrawGameListWindow()
 
     EndMenuButtons();
   }
-  EndFullscreenWindow();
+  EndFullscreenColumnWindow();
+
+  EndFullscreenColumns();
 }
 
 void LoadGameList()
