@@ -603,6 +603,10 @@ bool QtHostInterface::IsFullscreen() const
 
 bool QtHostInterface::SetFullscreen(bool enabled)
 {
+  // Qt doesn't support fullscreen without a system running.
+  if (!System::IsValid())
+    return false;
+
   if (m_is_fullscreen == enabled)
     return true;
 

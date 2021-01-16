@@ -5,9 +5,13 @@
 #include "IconsKenney.h"
 #include "common/file_system.h"
 #include "common/log.h"
+#include "common/make_array.h"
 #include "common/string.h"
 #include "common/string_util.h"
 #include "common_host_interface.h"
+#include "core/cheats.h"
+#include "core/cpu_core.h"
+#include "core/gpu.h"
 #include "core/host_display.h"
 #include "core/host_interface_progress_callback.h"
 #include "core/resources.h"
@@ -23,6 +27,8 @@
 #include "scmversion/scmversion.h"
 Log_SetChannel(FullscreenUI);
 
+static constexpr float LAYOUT_MAIN_MENU_BAR_SIZE = 20.0f; // Should be DPI scaled, not layout scaled!
+
 using ImGuiFullscreen::g_large_font;
 using ImGuiFullscreen::g_medium_font;
 using ImGuiFullscreen::LAYOUT_LARGE_FONT_SIZE;
@@ -37,6 +43,7 @@ using ImGuiFullscreen::BeginFullscreenWindow;
 using ImGuiFullscreen::BeginMenuButtons;
 using ImGuiFullscreen::CloseChoiceDialog;
 using ImGuiFullscreen::CloseFileSelector;
+using ImGuiFullscreen::DPIScale;
 using ImGuiFullscreen::EndFullscreenColumns;
 using ImGuiFullscreen::EndFullscreenColumnWindow;
 using ImGuiFullscreen::EndFullscreenWindow;
@@ -54,17 +61,19 @@ namespace FullscreenUI {
 //////////////////////////////////////////////////////////////////////////
 // Main
 //////////////////////////////////////////////////////////////////////////
+static void ClearImGuiFocus();
 static void ReturnToMainWindow();
 static void DrawLandingWindow();
 static void DrawSettingsWindow();
 static void DrawQuickMenu();
-static void ClearImGuiFocus();
+static void DrawDebugMenu();
 
 static CommonHostInterface* s_host_interface;
 static SettingsInterface* s_settings_interface;
 static MainWindowType s_current_main_window = MainWindowType::Landing;
 static SettingsPage s_settings_page = SettingsPage::InterfaceSettings;
 static Settings s_settings_copy;
+static bool s_debug_menu_enabled;
 
 //////////////////////////////////////////////////////////////////////////
 // Resources
@@ -125,6 +134,7 @@ bool Initialize(CommonHostInterface* host_interface, SettingsInterface* settings
     return false;
 
   s_settings_copy.Load(*settings_interface);
+  SetDebugMenuEnabled(settings_interface->GetBoolValue("Main", "ShowDebugMenu", false));
   return true;
 }
 
@@ -173,6 +183,8 @@ void Shutdown()
 
 void Render()
 {
+  DrawDebugMenu();
+
   ImGuiFullscreen::BeginLayout();
 
   switch (s_current_main_window)
@@ -295,6 +307,77 @@ std::unique_ptr<HostDisplayTexture> LoadTextureResource(const char* name)
   return texture;
 }
 
+//////////////////////////////////////////////////////////////////////////
+// Utility
+//////////////////////////////////////////////////////////////////////////
+
+static void DoStartFile()
+{
+  const auto callback = [](const std::string& path) {
+    if (!path.empty())
+    {
+      s_host_interface->RunLater([path]() {
+        SystemBootParameters boot_params;
+        boot_params.filename = std::move(path);
+        s_host_interface->BootSystem(boot_params);
+      });
+      ClearImGuiFocus();
+    }
+    CloseFileSelector();
+  };
+
+  OpenFileSelector(ICON_FA_COMPACT_DISC "  Select Disc Image", false, std::move(callback),
+                   {"*.bin", "*.cue", "*.iso", "*.img", "*.chd", "*.psexe", "*.exe", "*.psf"});
+}
+
+static void DoStartBIOS()
+{
+  s_host_interface->RunLater([]() {
+    SystemBootParameters boot_params;
+    s_host_interface->BootSystem(boot_params);
+  });
+  ClearImGuiFocus();
+}
+
+static void DoPowerOff()
+{
+  s_host_interface->RunLater([]() {
+    if (!System::IsValid())
+      return;
+
+    if (g_settings.save_state_on_exit)
+      s_host_interface->SaveResumeSaveState();
+    s_host_interface->PowerOffSystem();
+
+    ReturnToMainWindow();
+  });
+  ClearImGuiFocus();
+}
+
+static void DoReset()
+{
+  s_host_interface->RunLater([]() {
+    if (!System::IsValid())
+      return;
+
+    s_host_interface->ResetSystem();
+  });
+}
+
+static void DoPause()
+{
+  s_host_interface->RunLater([]() {
+    if (!System::IsValid())
+      return;
+
+    s_host_interface->PauseSystem(!System::IsPaused());
+  });
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Landing Window
+//////////////////////////////////////////////////////////////////////////
+
 void DrawLandingWindow()
 {
   BeginFullscreenColumns();
@@ -321,38 +404,13 @@ void DrawLandingWindow()
                    "Launch a game from images scanned from your game directories."))
     {
       s_host_interface->RunLater(SwitchToGameList);
-      ClearImGuiFocus();
     }
 
     if (MenuButton(" " ICON_FA_FOLDER_OPEN "  Start File", "Launch a game by selecting a file/disc image."))
-    {
-      s_host_interface->RunLater([]() {
-        const auto callback = [](const std::string& path) {
-          if (!path.empty())
-          {
-            s_host_interface->RunLater([path]() {
-              SystemBootParameters boot_params;
-              boot_params.filename = std::move(path);
-              s_host_interface->BootSystem(boot_params);
-            });
-          }
-          CloseFileSelector();
-        };
-
-        OpenFileSelector(ICON_FA_COMPACT_DISC "  Select Disc Image", false, std::move(callback),
-                         {"*.bin", "*.cue", "*.iso", "*.img", "*.chd", "*.psexe", "*.exe"});
-      });
-      ClearImGuiFocus();
-    }
+      s_host_interface->RunLater(DoStartFile);
 
     if (MenuButton(" " ICON_FA_TOOLBOX "  Start BIOS", "Start the console without any disc inserted."))
-    {
-      s_host_interface->RunLater([]() {
-        SystemBootParameters boot_params;
-        s_host_interface->BootSystem(boot_params);
-      });
-      ClearImGuiFocus();
-    }
+      s_host_interface->RunLater(DoStartBIOS);
 
     if (MenuButton(" " ICON_FA_UNDO "  Load State", "Loads a global save state."))
     {
@@ -715,7 +773,19 @@ void DrawSettingsWindow()
         break;
 
       case SettingsPage::AdvancedSettings:
-        break;
+      {
+        BeginMenuButtons(1, false);
+
+        bool debug_menu = s_debug_menu_enabled;
+        if (ToggleButton("Enable Debug Menu", "Shows a debug menu bar with additional statistics and quick settings.",
+                         &debug_menu))
+        {
+          s_host_interface->RunLater([debug_menu]() { SetDebugMenuEnabled(debug_menu, true); });
+        }
+
+        EndMenuButtons();
+      }
+      break;
     }
 
     if (settings_changed)
@@ -762,7 +832,7 @@ void DrawQuickMenu()
       s_current_main_window = MainWindowType::Settings;
 
     if (ActiveButton(ICON_FA_POWER_OFF "  Exit Game", false))
-      s_host_interface->PowerOffSystem();
+      s_host_interface->RunLater(DoPowerOff);
 
     EndMenuButtons();
   }
@@ -1134,6 +1204,576 @@ HostDisplayTexture* GetCoverForCurrentGame()
     return s_placeholder_texture.get();
 
   return GetGameListCover(entry);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Debug Menu
+//////////////////////////////////////////////////////////////////////////
+
+void SetDebugMenuEnabled(bool enabled, bool save_to_ini)
+{
+  if (s_debug_menu_enabled == enabled)
+    return;
+
+  const float size = enabled ? DPIScale(LAYOUT_MAIN_MENU_BAR_SIZE) : 0.0f;
+  s_host_interface->GetDisplay()->SetDisplayTopMargin(static_cast<s32>(size));
+  ImGuiFullscreen::SetMenuBarSize(size);
+  s_debug_menu_enabled = enabled;
+
+  if (save_to_ini)
+  {
+    s_settings_interface->SetBoolValue("Main", "ShowDebugMenu", enabled);
+    s_settings_interface->Save();
+  }
+}
+
+static void DrawDebugStats();
+static void DrawDebugSystemMenu();
+static void DrawDebugSettingsMenu();
+static void DrawDebugDebugMenu();
+
+void DrawDebugMenu()
+{
+  if (!s_debug_menu_enabled)
+    return;
+
+  if (!ImGui::BeginMainMenuBar())
+    return;
+
+  if (ImGui::BeginMenu("System"))
+  {
+    DrawDebugSystemMenu();
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Settings"))
+  {
+    DrawDebugSettingsMenu();
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Debug"))
+  {
+    DrawDebugDebugMenu();
+    ImGui::EndMenu();
+  }
+
+  DrawDebugStats();
+
+  ImGui::EndMainMenuBar();
+}
+
+void DrawDebugStats()
+{
+  if (!System::IsShutdown())
+  {
+    const float framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale.x;
+
+    if (System::IsPaused())
+    {
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (50.0f * framebuffer_scale));
+      ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Paused");
+    }
+    else
+    {
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (420.0f * framebuffer_scale));
+      ImGui::Text("Average: %.2fms", System::GetAverageFrameTime());
+
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (310.0f * framebuffer_scale));
+      ImGui::Text("Worst: %.2fms", System::GetWorstFrameTime());
+
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (210.0f * framebuffer_scale));
+
+      const float speed = System::GetEmulationSpeed();
+      const u32 rounded_speed = static_cast<u32>(std::round(speed));
+      if (speed < 90.0f)
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%u%%", rounded_speed);
+      else if (speed < 110.0f)
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "%u%%", rounded_speed);
+      else
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%u%%", rounded_speed);
+
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (165.0f * framebuffer_scale));
+      ImGui::Text("FPS: %.2f", System::GetFPS());
+
+      ImGui::SetCursorPosX(ImGui::GetIO().DisplaySize.x - (80.0f * framebuffer_scale));
+      ImGui::Text("VPS: %.2f", System::GetVPS());
+    }
+  }
+}
+
+void DrawDebugSystemMenu()
+{
+  const bool system_enabled = static_cast<bool>(!System::IsShutdown());
+
+  if (ImGui::MenuItem("Start Disc", nullptr, false, !system_enabled))
+  {
+    DoStartFile();
+    ClearImGuiFocus();
+  }
+
+  if (ImGui::MenuItem("Start BIOS", nullptr, false, !system_enabled))
+  {
+    DoStartBIOS();
+    ClearImGuiFocus();
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::MenuItem("Power Off", nullptr, false, system_enabled))
+  {
+    DoPowerOff();
+    ClearImGuiFocus();
+  }
+
+  if (ImGui::MenuItem("Reset", nullptr, false, system_enabled))
+  {
+    DoReset();
+    ClearImGuiFocus();
+  }
+
+  if (ImGui::MenuItem("Pause", nullptr, System::IsPaused(), system_enabled))
+  {
+    DoPause();
+    ClearImGuiFocus();
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::MenuItem("Change Disc", nullptr, false, system_enabled))
+  {
+#if 0
+    DoChangeDisc();
+#endif
+    ClearImGuiFocus();
+  }
+
+  if (ImGui::MenuItem("Remove Disc", nullptr, false, system_enabled))
+  {
+    s_host_interface->RunLater([]() { System::RemoveMedia(); });
+    ClearImGuiFocus();
+  }
+
+  if (ImGui::MenuItem("Frame Step", nullptr, false, system_enabled))
+  {
+#if 0
+    s_host_interface->RunLater([]() { DoFrameStep(); });
+#endif
+    ClearImGuiFocus();
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::BeginMenu("Load State"))
+  {
+    for (u32 i = 1; i <= CommonHostInterface::GLOBAL_SAVE_STATE_SLOTS; i++)
+    {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "State %u", i);
+      if (ImGui::MenuItem(buf))
+      {
+        s_host_interface->RunLater([i]() { s_host_interface->LoadState(true, i); });
+        ClearImGuiFocus();
+      }
+    }
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Save State", system_enabled))
+  {
+    for (u32 i = 1; i <= CommonHostInterface::GLOBAL_SAVE_STATE_SLOTS; i++)
+    {
+      TinyString buf;
+      buf.Format("State %u", i);
+      if (ImGui::MenuItem(buf))
+      {
+        s_host_interface->RunLater([i]() { s_host_interface->SaveState(true, i); });
+        ClearImGuiFocus();
+      }
+    }
+    ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::BeginMenu("Cheats", system_enabled))
+  {
+    const bool has_cheat_file = System::HasCheatList();
+    if (ImGui::BeginMenu("Enabled Cheats", has_cheat_file))
+    {
+      CheatList* cl = System::GetCheatList();
+      for (u32 i = 0; i < cl->GetCodeCount(); i++)
+      {
+        const CheatCode& cc = cl->GetCode(i);
+        if (ImGui::MenuItem(cc.description.c_str(), nullptr, cc.enabled, true))
+          s_host_interface->SetCheatCodeState(i, !cc.enabled, g_settings.auto_load_cheats);
+      }
+
+      ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Apply Cheat", has_cheat_file))
+    {
+      CheatList* cl = System::GetCheatList();
+      for (u32 i = 0; i < cl->GetCodeCount(); i++)
+      {
+        const CheatCode& cc = cl->GetCode(i);
+        if (ImGui::MenuItem(cc.description.c_str()))
+          s_host_interface->ApplyCheatCode(i);
+      }
+
+      ImGui::EndMenu();
+    }
+
+    ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+
+  if (ImGui::MenuItem("Exit"))
+    s_host_interface->RequestExit();
+}
+
+void DrawDebugSettingsMenu()
+{
+  bool settings_changed = false;
+
+  if (ImGui::BeginMenu("CPU Execution Mode"))
+  {
+    const CPUExecutionMode current = s_settings_copy.cpu_execution_mode;
+    for (u32 i = 0; i < static_cast<u32>(CPUExecutionMode::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetCPUExecutionModeDisplayName(static_cast<CPUExecutionMode>(i)), nullptr,
+                          i == static_cast<u32>(current)))
+      {
+        s_settings_copy.cpu_execution_mode = static_cast<CPUExecutionMode>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::MenuItem("CPU Clock Control", nullptr, &s_settings_copy.cpu_overclock_enable))
+  {
+    settings_changed = true;
+    s_settings_copy.UpdateOverclockActive();
+  }
+
+  if (ImGui::BeginMenu("CPU Clock Speed"))
+  {
+    static constexpr auto values = make_array(10u, 25u, 50u, 75u, 100u, 125u, 150u, 175u, 200u, 225u, 250u, 275u, 300u,
+                                              350u, 400u, 450u, 500u, 600u, 700u, 800u);
+    const u32 percent = s_settings_copy.GetCPUOverclockPercent();
+    for (u32 value : values)
+    {
+      if (ImGui::MenuItem(TinyString::FromFormat("%u%%", value), nullptr, percent == value))
+      {
+        s_settings_copy.SetCPUOverclockPercent(value);
+        s_settings_copy.UpdateOverclockActive();
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  settings_changed |=
+    ImGui::MenuItem("Recompiler Memory Exceptions", nullptr, &s_settings_copy.cpu_recompiler_memory_exceptions);
+  if (ImGui::BeginMenu("Recompiler Fastmem"))
+  {
+    for (u32 i = 0; i < static_cast<u32>(CPUFastmemMode::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetCPUFastmemModeDisplayName(static_cast<CPUFastmemMode>(i)), nullptr,
+                          s_settings_copy.cpu_fastmem_mode == static_cast<CPUFastmemMode>(i)))
+      {
+        s_settings_copy.cpu_fastmem_mode = static_cast<CPUFastmemMode>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  settings_changed |= ImGui::MenuItem("Recompiler ICache", nullptr, &s_settings_copy.cpu_recompiler_icache);
+
+  ImGui::Separator();
+
+  if (ImGui::BeginMenu("Renderer"))
+  {
+    const GPURenderer current = s_settings_copy.gpu_renderer;
+    for (u32 i = 0; i < static_cast<u32>(GPURenderer::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetRendererDisplayName(static_cast<GPURenderer>(i)), nullptr,
+                          i == static_cast<u32>(current)))
+      {
+        s_settings_copy.gpu_renderer = static_cast<GPURenderer>(i);
+        settings_changed = true;
+      }
+    }
+
+    settings_changed |= ImGui::MenuItem("GPU on Thread", nullptr, &s_settings_copy.gpu_use_thread);
+
+    ImGui::EndMenu();
+  }
+
+  bool fullscreen = s_host_interface->IsFullscreen();
+  if (ImGui::MenuItem("Fullscreen", nullptr, &fullscreen))
+    s_host_interface->RunLater([fullscreen] { s_host_interface->SetFullscreen(fullscreen); });
+
+  if (ImGui::BeginMenu("Resize to Game", System::IsValid()))
+  {
+    static constexpr auto scales = make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    for (const u32 scale : scales)
+    {
+      if (ImGui::MenuItem(TinyString::FromFormat("%ux Scale", scale)))
+        s_host_interface->RunLater(
+          [scale]() { s_host_interface->RequestRenderWindowScale(static_cast<float>(scale)); });
+    }
+
+    ImGui::EndMenu();
+  }
+
+  settings_changed |= ImGui::MenuItem("VSync", nullptr, &s_settings_copy.video_sync_enabled);
+
+  ImGui::Separator();
+
+  if (ImGui::BeginMenu("Resolution Scale"))
+  {
+    const u32 current_internal_resolution = s_settings_copy.gpu_resolution_scale;
+    for (u32 scale = 1; scale <= GPU::MAX_RESOLUTION_SCALE; scale++)
+    {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%ux (%ux%u)", scale, scale * VRAM_WIDTH, scale * VRAM_HEIGHT);
+
+      if (ImGui::MenuItem(buf, nullptr, current_internal_resolution == scale))
+      {
+        s_settings_copy.gpu_resolution_scale = scale;
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Multisampling"))
+  {
+    const u32 current_multisamples = s_settings_copy.gpu_multisamples;
+    const bool current_ssaa = s_settings_copy.gpu_per_sample_shading;
+
+    if (ImGui::MenuItem("None", nullptr, (current_multisamples == 1)))
+    {
+      s_settings_copy.gpu_multisamples = 1;
+      s_settings_copy.gpu_per_sample_shading = false;
+      settings_changed = true;
+    }
+
+    for (u32 i = 2; i <= 32; i *= 2)
+    {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%ux MSAA", i);
+
+      if (ImGui::MenuItem(buf, nullptr, (current_multisamples == i && !current_ssaa)))
+      {
+        s_settings_copy.gpu_multisamples = i;
+        s_settings_copy.gpu_per_sample_shading = false;
+        settings_changed = true;
+      }
+    }
+
+    for (u32 i = 2; i <= 32; i *= 2)
+    {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%ux SSAA", i);
+
+      if (ImGui::MenuItem(buf, nullptr, (current_multisamples == i && current_ssaa)))
+      {
+        s_settings_copy.gpu_multisamples = i;
+        s_settings_copy.gpu_per_sample_shading = true;
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("PGXP"))
+  {
+    settings_changed |= ImGui::MenuItem("PGXP Enabled", nullptr, &s_settings_copy.gpu_pgxp_enable);
+    settings_changed |=
+      ImGui::MenuItem("PGXP Culling", nullptr, &s_settings_copy.gpu_pgxp_culling, s_settings_copy.gpu_pgxp_enable);
+    settings_changed |= ImGui::MenuItem("PGXP Texture Correction", nullptr,
+                                        &s_settings_copy.gpu_pgxp_texture_correction, s_settings_copy.gpu_pgxp_enable);
+    settings_changed |= ImGui::MenuItem("PGXP Vertex Cache", nullptr, &s_settings_copy.gpu_pgxp_vertex_cache,
+                                        s_settings_copy.gpu_pgxp_enable);
+    settings_changed |=
+      ImGui::MenuItem("PGXP CPU Instructions", nullptr, &s_settings_copy.gpu_pgxp_cpu, s_settings_copy.gpu_pgxp_enable);
+    settings_changed |= ImGui::MenuItem("PGXP Preserve Projection Precision", nullptr,
+                                        &s_settings_copy.gpu_pgxp_preserve_proj_fp, s_settings_copy.gpu_pgxp_enable);
+    settings_changed |= ImGui::MenuItem("PGXP Depth Buffer", nullptr, &s_settings_copy.gpu_pgxp_depth_buffer,
+                                        s_settings_copy.gpu_pgxp_enable);
+    ImGui::EndMenu();
+  }
+
+  settings_changed |= ImGui::MenuItem("True (24-Bit) Color", nullptr, &s_settings_copy.gpu_true_color);
+  settings_changed |= ImGui::MenuItem("Scaled Dithering", nullptr, &s_settings_copy.gpu_scaled_dithering);
+
+  if (ImGui::BeginMenu("Texture Filtering"))
+  {
+    const GPUTextureFilter current = s_settings_copy.gpu_texture_filter;
+    for (u32 i = 0; i < static_cast<u32>(GPUTextureFilter::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetTextureFilterDisplayName(static_cast<GPUTextureFilter>(i)), nullptr,
+                          i == static_cast<u32>(current)))
+      {
+        s_settings_copy.gpu_texture_filter = static_cast<GPUTextureFilter>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  ImGui::Separator();
+
+  settings_changed |= ImGui::MenuItem("Disable Interlacing", nullptr, &s_settings_copy.gpu_disable_interlacing);
+  settings_changed |= ImGui::MenuItem("Widescreen Hack", nullptr, &s_settings_copy.gpu_widescreen_hack);
+  settings_changed |= ImGui::MenuItem("Force NTSC Timings", nullptr, &s_settings_copy.gpu_force_ntsc_timings);
+  settings_changed |= ImGui::MenuItem("24-Bit Chroma Smoothing", nullptr, &s_settings_copy.gpu_24bit_chroma_smoothing);
+
+  ImGui::Separator();
+
+  settings_changed |= ImGui::MenuItem("Display Linear Filtering", nullptr, &s_settings_copy.display_linear_filtering);
+  settings_changed |= ImGui::MenuItem("Display Integer Scaling", nullptr, &s_settings_copy.display_integer_scaling);
+
+  if (ImGui::BeginMenu("Aspect Ratio"))
+  {
+    for (u32 i = 0; i < static_cast<u32>(DisplayAspectRatio::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetDisplayAspectRatioName(static_cast<DisplayAspectRatio>(i)), nullptr,
+                          s_settings_copy.display_aspect_ratio == static_cast<DisplayAspectRatio>(i)))
+      {
+        s_settings_copy.display_aspect_ratio = static_cast<DisplayAspectRatio>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Crop Mode"))
+  {
+    for (u32 i = 0; i < static_cast<u32>(DisplayCropMode::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetDisplayCropModeDisplayName(static_cast<DisplayCropMode>(i)), nullptr,
+                          s_settings_copy.display_crop_mode == static_cast<DisplayCropMode>(i)))
+      {
+        s_settings_copy.display_crop_mode = static_cast<DisplayCropMode>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  if (ImGui::BeginMenu("Downsample Mode"))
+  {
+    for (u32 i = 0; i < static_cast<u32>(GPUDownsampleMode::Count); i++)
+    {
+      if (ImGui::MenuItem(Settings::GetDownsampleModeDisplayName(static_cast<GPUDownsampleMode>(i)), nullptr,
+                          s_settings_copy.gpu_downsample_mode == static_cast<GPUDownsampleMode>(i)))
+      {
+        s_settings_copy.gpu_downsample_mode = static_cast<GPUDownsampleMode>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  settings_changed |= ImGui::MenuItem("Force 4:3 For 24-bit", nullptr, &s_settings_copy.display_force_4_3_for_24bit);
+
+  ImGui::Separator();
+
+  if (ImGui::MenuItem("Dump Audio", nullptr, s_host_interface->IsDumpingAudio(), System::IsValid()))
+  {
+    if (!s_host_interface->IsDumpingAudio())
+      s_host_interface->StartDumpingAudio();
+    else
+      s_host_interface->StopDumpingAudio();
+  }
+
+  if (ImGui::MenuItem("Save Screenshot"))
+    s_host_interface->RunLater([]() { s_host_interface->SaveScreenshot(); });
+
+  if (settings_changed)
+    s_host_interface->RunLater(SaveAndApplySettings);
+}
+
+void DrawDebugDebugMenu()
+{
+  const bool system_valid = System::IsValid();
+  Settings::DebugSettings& debug_settings = g_settings.debugging;
+  bool settings_changed = false;
+
+  if (ImGui::BeginMenu("Log Level"))
+  {
+    for (u32 i = LOGLEVEL_NONE; i < LOGLEVEL_COUNT; i++)
+    {
+      if (ImGui::MenuItem(Settings::GetLogLevelDisplayName(static_cast<LOGLEVEL>(i)), nullptr,
+                          g_settings.log_level == static_cast<LOGLEVEL>(i)))
+      {
+        s_settings_copy.log_level = static_cast<LOGLEVEL>(i);
+        settings_changed = true;
+      }
+    }
+
+    ImGui::EndMenu();
+  }
+
+  settings_changed |= ImGui::MenuItem("Log To Console", nullptr, &s_settings_copy.log_to_console);
+  settings_changed |= ImGui::MenuItem("Log To Debug", nullptr, &s_settings_copy.log_to_debug);
+  settings_changed |= ImGui::MenuItem("Log To File", nullptr, &s_settings_copy.log_to_file);
+
+  ImGui::Separator();
+
+  settings_changed |= ImGui::MenuItem("Disable All Enhancements", nullptr, &s_settings_copy.disable_all_enhancements);
+  settings_changed |= ImGui::MenuItem("Dump CPU to VRAM Copies", nullptr, &debug_settings.dump_cpu_to_vram_copies);
+  settings_changed |= ImGui::MenuItem("Dump VRAM to CPU Copies", nullptr, &debug_settings.dump_vram_to_cpu_copies);
+
+  if (ImGui::MenuItem("CPU Trace Logging", nullptr, CPU::IsTraceEnabled()))
+  {
+    if (!CPU::IsTraceEnabled())
+      CPU::StartTrace();
+    else
+      CPU::StopTrace();
+  }
+
+  ImGui::Separator();
+
+  settings_changed |= ImGui::MenuItem("Show VRAM", nullptr, &debug_settings.show_vram);
+  settings_changed |= ImGui::MenuItem("Show GPU State", nullptr, &debug_settings.show_gpu_state);
+  settings_changed |= ImGui::MenuItem("Show CDROM State", nullptr, &debug_settings.show_cdrom_state);
+  settings_changed |= ImGui::MenuItem("Show SPU State", nullptr, &debug_settings.show_spu_state);
+  settings_changed |= ImGui::MenuItem("Show Timers State", nullptr, &debug_settings.show_timers_state);
+  settings_changed |= ImGui::MenuItem("Show MDEC State", nullptr, &debug_settings.show_mdec_state);
+  settings_changed |= ImGui::MenuItem("Show DMA State", nullptr, &debug_settings.show_dma_state);
+
+  if (settings_changed)
+  {
+    // have to apply it to the copy too, otherwise it won't save
+    Settings::DebugSettings& debug_settings_copy = s_settings_copy.debugging;
+    debug_settings_copy.show_gpu_state = debug_settings.show_gpu_state;
+    debug_settings_copy.show_vram = debug_settings.show_vram;
+    debug_settings_copy.dump_cpu_to_vram_copies = debug_settings.dump_cpu_to_vram_copies;
+    debug_settings_copy.dump_vram_to_cpu_copies = debug_settings.dump_vram_to_cpu_copies;
+    debug_settings_copy.show_cdrom_state = debug_settings.show_cdrom_state;
+    debug_settings_copy.show_spu_state = debug_settings.show_spu_state;
+    debug_settings_copy.show_timers_state = debug_settings.show_timers_state;
+    debug_settings_copy.show_mdec_state = debug_settings.show_mdec_state;
+    debug_settings_copy.show_dma_state = debug_settings.show_dma_state;
+    s_host_interface->RunLater(SaveAndApplySettings);
+  }
 }
 
 } // namespace FullscreenUI

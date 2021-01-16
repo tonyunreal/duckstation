@@ -87,6 +87,9 @@ public:
   /// Loads new settings and applies them.
   virtual void ApplySettings() = 0;
 
+  virtual bool IsFullscreen() const;
+  virtual bool SetFullscreen(bool enabled);
+
   virtual bool Initialize() override;
   virtual void Shutdown() override;
 
@@ -236,9 +239,6 @@ protected:
 
   /// Executes per-frame tasks such as controller polling.
   virtual void PollAndUpdate();
-
-  virtual bool IsFullscreen() const;
-  virtual bool SetFullscreen(bool enabled);
 
   virtual std::unique_ptr<AudioStream> CreateAudioStream(AudioBackend backend) override;
   virtual s32 GetAudioOutputVolume() const override;

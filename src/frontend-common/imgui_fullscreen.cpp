@@ -26,6 +26,7 @@ float g_layout_scale = 1.0f;
 float g_layout_padding_left = 0.0f;
 float g_layout_padding_top = 0.0f;
 
+static float s_menu_bar_size;
 static std::string s_font_filename;
 static float s_font_size = 15.0f;
 static const ImWchar* s_font_glyph_range = nullptr;
@@ -45,6 +46,16 @@ void SetFont(const char* filename, float size_pixels, const ImWchar* glyph_range
     std::string().swap(s_font_filename);
   s_font_size = size_pixels;
   s_font_glyph_range = glyph_ranges;
+}
+
+void SetMenuBarSize(float size)
+{
+  if (s_menu_bar_size == size)
+    return;
+
+  s_menu_bar_size = size;
+  UpdateLayoutScale();
+  UpdateFonts();
 }
 
 static void AddIconFonts(float size)
@@ -112,9 +123,8 @@ bool UpdateLayoutScale()
   static constexpr float LAYOUT_RATIO = LAYOUT_SCREEN_WIDTH / LAYOUT_SCREEN_HEIGHT;
   const ImGuiIO& io = ImGui::GetIO();
 
-  const float menu_margin = 0.0f; // DPIScale(21.0f);
   const float screen_width = io.DisplaySize.x;
-  const float screen_height = io.DisplaySize.y - menu_margin;
+  const float screen_height = io.DisplaySize.y - s_menu_bar_size;
   const float screen_ratio = screen_width / screen_height;
   const float old_scale = g_layout_scale;
 
@@ -122,14 +132,14 @@ bool UpdateLayoutScale()
   {
     // screen is wider, use height, pad width
     g_layout_scale = screen_height / LAYOUT_SCREEN_HEIGHT;
-    g_layout_padding_top = menu_margin;
+    g_layout_padding_top = s_menu_bar_size;
     g_layout_padding_left = (screen_width - (LAYOUT_SCREEN_WIDTH * g_layout_scale)) / 2.0f;
   }
   else
   {
     // screen is taller, use width, pad height
     g_layout_scale = screen_width / LAYOUT_SCREEN_WIDTH;
-    g_layout_padding_top = (screen_height - (LAYOUT_SCREEN_HEIGHT * g_layout_scale)) / 2.0f + menu_margin;
+    g_layout_padding_top = (screen_height - (LAYOUT_SCREEN_HEIGHT * g_layout_scale)) / 2.0f + s_menu_bar_size;
     g_layout_padding_left = 0.0f;
   }
 

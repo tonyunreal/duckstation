@@ -45,5 +45,6 @@ void RefreshGameList();
 
 Settings& GetSettingsCopy();
 void SaveAndApplySettings();
+void SetDebugMenuEnabled(bool enabled, bool save_to_ini = false);
 
 } // namespace FullscreenUI
