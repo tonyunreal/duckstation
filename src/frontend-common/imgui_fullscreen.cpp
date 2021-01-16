@@ -4,7 +4,9 @@
 #include "IconsFontAwesome5.h"
 #include "IconsKenney.h"
 #include "common/assert.h"
+#include "common/file_system.h"
 #include "common/string.h"
+#include "common/string_util.h"
 #include "core/host_display.h"
 #include "core/host_interface.h"
 #include "imgui_internal.h"
@@ -12,6 +14,8 @@
 #include <cmath>
 
 namespace ImGuiFullscreen {
+static void DrawFileSelector();
+
 ImFont* g_standard_font = nullptr;
 ImFont* g_medium_font = nullptr;
 ImFont* g_large_font = nullptr;
@@ -107,7 +111,7 @@ bool UpdateLayoutScale()
   static constexpr float LAYOUT_RATIO = LAYOUT_SCREEN_WIDTH / LAYOUT_SCREEN_HEIGHT;
   const ImGuiIO& io = ImGui::GetIO();
 
-  const float menu_margin = DPIScale(21.0f);
+  const float menu_margin = 0.0f; // DPIScale(21.0f);
   const float screen_width = io.DisplaySize.x;
   const float screen_height = io.DisplaySize.y - menu_margin;
   const float screen_ratio = screen_width / screen_height;
@@ -144,6 +148,8 @@ void BeginLayout()
 
 void EndLayout()
 {
+  DrawFileSelector();
+
   ImGui::PopStyleColor(5);
   ImGui::PopStyleVar(2);
 }
@@ -196,8 +202,8 @@ void BeginMenuButtons(u32 num_items, bool center, float x_padding, float y_paddi
   s_menu_button_index = 0;
 
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, LayoutScale(x_padding, y_padding));
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, LayoutScale(8.0f));
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, LayoutScale(1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
   if (center)
@@ -213,6 +219,29 @@ void BeginMenuButtons(u32 num_items, bool center, float x_padding, float y_paddi
 void EndMenuButtons()
 {
   ImGui::PopStyleVar(4);
+}
+
+void DrawWindowTitle(const char* title)
+{
+  ImGuiWindow* window = ImGui::GetCurrentWindow();
+  const ImVec2 pos(window->DC.CursorPos + LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING, LAYOUT_MENU_BUTTON_Y_PADDING));
+  const ImVec2 size(window->WorkRect.GetWidth() - (LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING) * 2.0f),
+                    g_large_font->FontSize + LayoutScale(LAYOUT_MENU_BUTTON_Y_PADDING) * 2.0f);
+  const ImRect rect(pos, pos + size);
+
+  ImGui::ItemSize(size);
+  if (!ImGui::ItemAdd(rect, window->GetID("window_title")))
+    return;
+
+  ImGui::PushFont(g_large_font);
+  ImGui::RenderTextClipped(rect.Min, rect.Max, title, nullptr, nullptr, ImVec2(0.0f, 0.0f), &rect);
+  ImGui::PopFont();
+
+  const ImVec2 line_start(pos.x, pos.y + g_large_font->FontSize + LayoutScale(LAYOUT_MENU_BUTTON_Y_PADDING));
+  const ImVec2 line_end(pos.x + size.x, line_start.y);
+  const float line_thickness = LayoutScale(1.0f);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddLine(line_start, line_end, IM_COL32(255, 255, 255, 255), line_thickness);
 }
 
 static void GetMenuButtonFrameBounds(float height, ImVec2* pos, ImVec2* size)
@@ -584,6 +613,206 @@ bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_poi
   }
 
   return changed;
+}
+
+struct FileSelectorItem
+{
+  FileSelectorItem() = default;
+  FileSelectorItem(std::string display_name_, std::string full_path_, bool is_file_)
+    : display_name(std::move(display_name_)), full_path(std::move(full_path_)), is_file(is_file_)
+  {
+  }
+  FileSelectorItem(const FileSelectorItem&) = default;
+  FileSelectorItem(FileSelectorItem&&) = default;
+  ~FileSelectorItem() = default;
+
+  FileSelectorItem& operator=(const FileSelectorItem&) = default;
+  FileSelectorItem& operator=(FileSelectorItem&&) = default;
+
+  std::string display_name;
+  std::string full_path;
+  bool is_file;
+};
+
+static bool s_file_selector_open = false;
+static bool s_file_selector_directory = false;
+static std::string s_file_selector_title;
+static FileSelectorCallback s_file_selector_callback;
+static std::string s_file_selector_current_directory;
+static std::vector<std::string> s_file_selector_filters;
+static std::vector<FileSelectorItem> s_file_selector_items;
+
+static void PopulateFileSelectorItems()
+{
+  s_file_selector_items.clear();
+
+  if (s_file_selector_current_directory.empty())
+  {
+    for (std::string& root_path : FileSystem::GetRootDirectoryList())
+    {
+      s_file_selector_items.emplace_back(StringUtil::StdStringFromFormat(ICON_FA_FOLDER "  %s", root_path.c_str()),
+                                         std::move(root_path), false);
+    }
+  }
+  else
+  {
+    FileSystem::FindResultsArray results;
+    FileSystem::FindFiles(s_file_selector_current_directory.c_str(), "*",
+                          FILESYSTEM_FIND_FILES | FILESYSTEM_FIND_FOLDERS | FILESYSTEM_FIND_HIDDEN_FILES |
+                            FILESYSTEM_FIND_RELATIVE_PATHS,
+                          &results);
+
+    std::string parent_path;
+    std::string::size_type sep_pos = s_file_selector_current_directory.rfind(FS_OSPATH_SEPARATOR_CHARACTER);
+    if (sep_pos != std::string::npos)
+    {
+      parent_path = s_file_selector_current_directory.substr(0, sep_pos);
+      FileSystem::CanonicalizePath(parent_path, true);
+    }
+
+    s_file_selector_items.emplace_back(ICON_FA_FOLDER_OPEN "  <Parent Directory>", std::move(parent_path), false);
+    std::sort(results.begin(), results.end(), [](const FILESYSTEM_FIND_DATA& lhs, const FILESYSTEM_FIND_DATA& rhs) {
+      if ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) !=
+          (rhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY))
+        return (lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+      // return std::lexicographical_compare(lhs.FileName.begin(), lhs.FileName.end(), rhs.FileName.begin(),
+      // rhs.FileName.end());
+      return (StringUtil::Strcasecmp(lhs.FileName.c_str(), rhs.FileName.c_str()) < 0);
+    });
+
+    for (const FILESYSTEM_FIND_DATA& fd : results)
+    {
+      std::string full_path(StringUtil::StdStringFromFormat(
+        "%s" FS_OSPATH_SEPARATOR_STR "%s", s_file_selector_current_directory.c_str(), fd.FileName.c_str()));
+
+      if (fd.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY)
+      {
+        std::string title(StringUtil::StdStringFromFormat(ICON_FA_FOLDER "  %s", fd.FileName.c_str()));
+        s_file_selector_items.emplace_back(std::move(title), std::move(full_path), false);
+      }
+      else
+      {
+        if (s_file_selector_filters.empty() ||
+            std::none_of(s_file_selector_filters.begin(), s_file_selector_filters.end(),
+                         [&fd](const std::string& filter) {
+                           return StringUtil::WildcardMatch(fd.FileName.c_str(), filter.c_str());
+                         }))
+        {
+          continue;
+        }
+
+        std::string title(StringUtil::StdStringFromFormat(ICON_FA_FILE "  %s", fd.FileName.c_str()));
+        s_file_selector_items.emplace_back(std::move(title), std::move(full_path), true);
+      }
+    }
+  }
+}
+
+static void SetFileSelectorDirectory(std::string dir)
+{
+  while (!dir.empty() && dir.back() == FS_OSPATH_SEPARATOR_CHARACTER)
+    dir.erase(dir.size() - 1);
+
+  s_file_selector_current_directory = std::move(dir);
+  PopulateFileSelectorItems();
+}
+
+void OpenFileSelector(const char* title, bool select_directory, FileSelectorCallback callback,
+                      FileSelectorFilters filters)
+{
+  if (s_file_selector_open)
+    CloseFileSelector();
+
+  s_file_selector_open = true;
+  s_file_selector_directory = select_directory;
+  s_file_selector_title = StringUtil::StdStringFromFormat("%s##file_selector", title);
+  s_file_selector_callback = std::move(callback);
+  s_file_selector_filters = std::move(filters);
+  SetFileSelectorDirectory(FileSystem::GetWorkingDirectory());
+
+  ImGui::OpenPopup(s_file_selector_title.c_str());
+}
+
+void CloseFileSelector()
+{
+  s_file_selector_open = false;
+  s_file_selector_directory = false;
+  std::string().swap(s_file_selector_title);
+  FileSelectorCallback().swap(s_file_selector_callback);
+  FileSelectorFilters().swap(s_file_selector_filters);
+  std::string().swap(s_file_selector_current_directory);
+  s_file_selector_items.clear();
+  ImGui::CloseCurrentPopup();
+}
+
+void DrawFileSelector()
+{
+  if (!s_file_selector_open)
+    return;
+
+  ImGui::SetNextWindowPos(ImVec2(g_layout_padding_left, g_layout_padding_top));
+  ImGui::SetNextWindowSize(LayoutScale(LAYOUT_SCREEN_WIDTH, LAYOUT_SCREEN_HEIGHT));
+
+  FileSelectorItem* selected = nullptr;
+
+  ImGui::PushFont(g_large_font);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                      LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING, LAYOUT_MENU_BUTTON_Y_PADDING));
+
+  bool is_open = true;
+  bool directory_selected = false;
+  if (ImGui::BeginPopupModal(s_file_selector_title.c_str(), &is_open,
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
+  {
+    BeginMenuButtons(static_cast<u32>(s_file_selector_items.size()) + 2u, false);
+
+    if (s_file_selector_directory && !s_file_selector_current_directory.empty())
+    {
+      if (MenuButton(ICON_FA_PLUS "<Use This Directory>", nullptr, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
+        directory_selected = true;
+    }
+
+    SmallString title;
+    for (FileSelectorItem& item : s_file_selector_items)
+    {
+      if (MenuButton(item.display_name.c_str(), nullptr, true, LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY))
+        selected = &item;
+    }
+
+    EndMenuButtons();
+
+    ImGui::EndPopup();
+  }
+  else
+  {
+    is_open = false;
+  }
+
+  ImGui::PopStyleVar(1);
+  ImGui::PopFont();
+
+  if (selected)
+  {
+    if (selected->is_file)
+    {
+      s_file_selector_callback(selected->full_path);
+    }
+    else
+    {
+      SetFileSelectorDirectory(std::move(selected->full_path));
+    }
+  }
+  else if (directory_selected)
+  {
+    s_file_selector_callback(s_file_selector_current_directory);
+  }
+  else if (!is_open)
+  {
+    std::string no_path;
+    s_file_selector_callback(no_path);
+    CloseFileSelector();
+  }
 }
 
 } // namespace ImGuiFullscreen

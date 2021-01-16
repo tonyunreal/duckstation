@@ -4,6 +4,7 @@
 #include "log.h"
 #include "string_util.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef __APPLE__
@@ -285,6 +286,33 @@ std::string GetPathDirectory(const char* path)
   std::string str;
   str.append(path, slash_ptr - path);
   return str;
+}
+
+std::vector<std::string> GetRootDirectoryList()
+{
+  std::vector<std::string> results;
+
+#ifdef WIN32
+  char buf[256];
+  if (GetLogicalDriveStringsA(sizeof(buf), buf) != 0)
+  {
+    const char* ptr = buf;
+    while (*ptr != '\0')
+    {
+      const std::size_t len = std::strlen(ptr);
+      results.emplace_back(ptr, len);
+      ptr += len + 1u;
+    }
+  }
+#else
+  const char* home_path = std::getenv("HOME");
+  if (home_path)
+    results.push_back(home_path);
+
+  results.push_back("/");
+#endif
+
+  return results;
 }
 
 void BuildPathRelativeToFile(char* Destination, u32 cbDestination, const char* CurrentFileName, const char* NewFileName,

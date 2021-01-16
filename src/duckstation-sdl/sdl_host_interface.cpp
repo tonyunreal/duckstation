@@ -657,8 +657,8 @@ void SDLHostInterface::ProcessEvents()
 
 void SDLHostInterface::DrawImGuiWindows()
 {
-  if (!m_fullscreen)
-    DrawMainMenuBar();
+  /*if (!m_fullscreen)
+    DrawMainMenuBar();*/
 
   CommonHostInterface::DrawImGuiWindows();
 

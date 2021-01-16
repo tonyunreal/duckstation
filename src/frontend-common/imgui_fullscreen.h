@@ -1,6 +1,7 @@
 #pragma once
 #include "common/types.h"
 #include "imgui.h"
+#include <functional>
 
 namespace ImGuiFullscreen {
 #define HEX_TO_IMVEC4(hex, alpha)                                                                                      \
@@ -131,6 +132,8 @@ bool UpdateLayoutScale();
 void BeginLayout();
 void EndLayout();
 
+void DrawWindowTitle(const char* title);
+
 bool BeginFullscreenColumnWindow(float start, float end, const char* name,
                                  const ImVec4& background = HEX_TO_IMVEC4(0x212121, 0xFF));
 bool BeginFullscreenWindow(float left, float top, float width, float height, const char* name,
@@ -178,5 +181,11 @@ static ALWAYS_INLINE bool EnumChoiceButton(const char* title, const char* summar
     return false;
   }
 }
+
+using FileSelectorCallback = std::function<void(const std::string& path)>;
+using FileSelectorFilters = std::vector<std::string>;
+void OpenFileSelector(const char* title, bool select_directory, FileSelectorCallback callback,
+                      FileSelectorFilters filters = FileSelectorFilters());
+void CloseFileSelector();
 
 } // namespace ImGuiFullscreen

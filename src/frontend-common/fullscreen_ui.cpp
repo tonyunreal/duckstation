@@ -316,7 +316,22 @@ void DrawLandingWindow()
 
     if (MenuButton(" " ICON_FA_FOLDER_OPEN "  Start File", "Launch a game by selecting a file/disc image."))
     {
-      // RunLater([this]() { DoStartDisc(); });
+      s_host_interface->RunLater([]() {
+        const auto callback = [](const std::string& path) {
+          if (!path.empty())
+          {
+            s_host_interface->RunLater([path]() {
+              SystemBootParameters boot_params;
+              boot_params.filename = std::move(path);
+              s_host_interface->BootSystem(boot_params);
+            });
+          }
+          ImGuiFullscreen::CloseFileSelector();
+        };
+
+        ImGuiFullscreen::OpenFileSelector(ICON_FA_COMPACT_DISC "  Select Disc Image", false, std::move(callback),
+                                          {"*.bin", "*.cue", "*.iso", "*.img", "*.chd", "*.psexe", "*.exe"});
+      });
       ClearImGuiFocus();
     }
 
@@ -788,10 +803,10 @@ void DrawSaveStateSelector(bool is_loading)
 
   if (BeginFullscreenColumnWindow(0.0f, 570.0f, "save_state_selector_preview", ImVec4(0.11f, 0.15f, 0.17f, 1.00f)))
   {
-    ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
+    /*ImGui::SetCursorPos(LayoutScale(20.0f, 20.0f));
     ImGui::PushFont(g_large_font);
     ImGui::TextUnformatted(is_loading ? ICON_FA_FOLDER_OPEN "  Load State" : ICON_FA_SAVE "  Save State");
-    ImGui::PopFont();
+    ImGui::PopFont();*/
 
     ImGui::SetCursorPos(LayoutScale(ImVec2(85.0f, 160.0f)));
     ImGui::Image(selected_texture ? selected_texture->GetHandle() : s_placeholder_texture->GetHandle(),

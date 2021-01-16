@@ -148,6 +148,9 @@ std::string ReplaceExtension(std::string_view path, std::string_view new_extensi
 /// Returns the directory component of a filename.
 std::string GetPathDirectory(const char* path);
 
+/// Returns a list of "root directories" (i.e. root/home directories on Linux, drive letters on Windows).
+std::vector<std::string> GetRootDirectoryList();
+
 // search for files
 bool FindFiles(const char* Path, const char* Pattern, u32 Flags, FindResultsArray* pResults);
 
