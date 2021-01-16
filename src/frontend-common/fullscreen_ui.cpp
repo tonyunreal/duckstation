@@ -32,12 +32,12 @@ using ImGuiFullscreen::LAYOUT_SCREEN_WIDTH;
 
 using ImGuiFullscreen::ActiveButton;
 using ImGuiFullscreen::BeginFullscreenColumns;
-using ImGuiFullscreen::EndFullscreenColumns;
 using ImGuiFullscreen::BeginFullscreenColumnWindow;
-using ImGuiFullscreen::EndFullscreenColumnWindow;
 using ImGuiFullscreen::BeginFullscreenWindow;
-using ImGuiFullscreen::EndFullscreenWindow;
 using ImGuiFullscreen::BeginMenuButtons;
+using ImGuiFullscreen::EndFullscreenColumns;
+using ImGuiFullscreen::EndFullscreenColumnWindow;
+using ImGuiFullscreen::EndFullscreenWindow;
 using ImGuiFullscreen::EndMenuButtons;
 using ImGuiFullscreen::EnumChoiceButton;
 using ImGuiFullscreen::LayoutScale;
@@ -234,7 +234,8 @@ bool LoadResources()
 
   if (!(s_disc_region_textures[static_cast<u32>(DiscRegion::NTSC_U)] = LoadTextureResource("flag-uc.png")) ||
       !(s_disc_region_textures[static_cast<u32>(DiscRegion::NTSC_J)] = LoadTextureResource("flag-jp.png")) ||
-      !(s_disc_region_textures[static_cast<u32>(DiscRegion::PAL)] = LoadTextureResource("flag-eu.png")))
+      !(s_disc_region_textures[static_cast<u32>(DiscRegion::PAL)] = LoadTextureResource("flag-eu.png")) ||
+      !(s_disc_region_textures[static_cast<u32>(DiscRegion::Other)] = LoadTextureResource("flag-eu.png")))
   {
     return false;
   }

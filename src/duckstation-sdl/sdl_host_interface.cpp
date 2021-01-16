@@ -225,22 +225,16 @@ void SDLHostInterface::UpdateFramebufferScale()
   if (framebuffer_scale != io.DisplayFramebufferScale.x)
   {
     io.DisplayFramebufferScale = ImVec2(framebuffer_scale, framebuffer_scale);
-    ImGui::Render();
     ImGui::GetStyle().ScaleAllSizes(framebuffer_scale);
-    ImGui::NewFrame();
   }
 
   if (ImGuiFullscreen::UpdateLayoutScale())
   {
-    ImGui::Render();
-
     if (ImGuiFullscreen::UpdateFonts())
     {
       if (!m_display->UpdateImGuiFontTexture())
         Panic("Failed to update font texture");
     }
-
-    ImGui::NewFrame();
   }
 }
 
@@ -428,8 +422,6 @@ bool SDLHostInterface::Initialize()
     Log_ErrorPrintf("Failed to create host display");
     return false;
   }
-
-  ImGui::NewFrame();
 
   // process events to pick up controllers before updating input map
   ProcessEvents();
@@ -1798,11 +1790,12 @@ void SDLHostInterface::Run()
 
     // rendering
     {
+      ImGui::NewFrame();
       DrawImGuiWindows();
+      ImGui::EndFrame();
 
       m_display->Render();
       ImGui_ImplSDL2_NewFrame(m_window);
-      ImGui::NewFrame();
 
       if (System::IsRunning())
       {

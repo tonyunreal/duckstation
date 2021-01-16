@@ -764,8 +764,6 @@ void OpenFileSelector(const char* title, bool select_directory, FileSelectorCall
   s_file_selector_callback = std::move(callback);
   s_file_selector_filters = std::move(filters);
   SetFileSelectorDirectory(FileSystem::GetWorkingDirectory());
-
-  ImGui::OpenPopup(s_file_selector_title.c_str());
 }
 
 void CloseFileSelector()
@@ -787,6 +785,7 @@ void DrawFileSelector()
 
   ImGui::SetNextWindowPos(ImVec2(g_layout_padding_left, g_layout_padding_top));
   ImGui::SetNextWindowSize(LayoutScale(LAYOUT_SCREEN_WIDTH, LAYOUT_SCREEN_HEIGHT));
+  ImGui::OpenPopup(s_file_selector_title.c_str());
 
   FileSelectorItem* selected = nullptr;
 
