@@ -41,7 +41,7 @@ void CloseQuickMenu();
 void Shutdown();
 void Render();
 
-void RefreshGameList();
+void EnsureGameListLoaded();
 
 Settings& GetSettingsCopy();
 void SaveAndApplySettings();

@@ -17,6 +17,7 @@
 #include "core/resources.h"
 #include "core/settings.h"
 #include "core/system.h"
+#include "fullscreen_ui_progress_callback.h"
 #include "game_list.h"
 #include "icon.h"
 #include "imgui.h"
@@ -25,6 +26,7 @@
 #include "imgui_stdlib.h"
 #include "imgui_styles.h"
 #include "scmversion/scmversion.h"
+#include <thread>
 Log_SetChannel(FullscreenUI);
 
 static constexpr float LAYOUT_MAIN_MENU_BAR_SIZE = 20.0f; // Should be DPI scaled, not layout scaled!
@@ -51,9 +53,12 @@ using ImGuiFullscreen::EndMenuButtons;
 using ImGuiFullscreen::EnumChoiceButton;
 using ImGuiFullscreen::LayoutScale;
 using ImGuiFullscreen::MenuButton;
+using ImGuiFullscreen::MenuButtonWithValue;
+using ImGuiFullscreen::MenuHeading;
 using ImGuiFullscreen::MenuImageButton;
 using ImGuiFullscreen::OpenChoiceDialog;
 using ImGuiFullscreen::OpenFileSelector;
+using ImGuiFullscreen::RangeButton;
 using ImGuiFullscreen::ToggleButton;
 
 namespace FullscreenUI {
@@ -113,14 +118,14 @@ static std::vector<SaveStateListEntry> s_save_state_selector_slots;
 // Game List
 //////////////////////////////////////////////////////////////////////////
 static void DrawGameListWindow();
-static void LoadGameList();
 static void SwitchToGameList();
+static void QueueGameListRefresh();
 static HostDisplayTexture* GetGameListCover(const GameListEntry* entry);
 static HostDisplayTexture* GetCoverForCurrentGame();
 
 // Lazily populated cover images.
 static std::unordered_map<std::string, std::unique_ptr<HostDisplayTexture>> s_cover_image_map;
-static bool s_game_list_loaded = false;
+static std::thread s_game_list_load_thread;
 
 //////////////////////////////////////////////////////////////////////////
 // Main
@@ -135,6 +140,7 @@ bool Initialize(CommonHostInterface* host_interface, SettingsInterface* settings
 
   s_settings_copy.Load(*settings_interface);
   SetDebugMenuEnabled(settings_interface->GetBoolValue("Main", "ShowDebugMenu", false));
+  QueueGameListRefresh();
   return true;
 }
 
@@ -172,9 +178,11 @@ void CloseQuickMenu()
 
 void Shutdown()
 {
+  if (s_game_list_load_thread.joinable())
+    s_game_list_load_thread.join();
+
   s_save_state_selector_slots.clear();
   s_cover_image_map.clear();
-  s_game_list_loaded = false;
   DestroyResources();
 
   s_settings_interface = nullptr;
@@ -534,6 +542,8 @@ void DrawSettingsWindow()
 
       case SettingsPage::GameListSettings:
       {
+        EnsureGameListLoaded();
+
         BeginMenuButtons(4, false);
 
         if (MenuButton(ICON_FA_FOLDER_PLUS "  Add Search Directory", "Adds a new directory to the game search list."))
@@ -587,21 +597,255 @@ void DrawSettingsWindow()
                            });
         }
 
+        MenuHeading("Search Directories");
+        for (const GameList::DirectoryEntry& entry : s_host_interface->GetGameList()->GetSearchDirectories())
+          ActiveButton(entry.path.c_str(), false, false);
+
         EndMenuButtons();
       }
       break;
 
       case SettingsPage::ConsoleSettings:
-        break;
+      {
+        static constexpr auto emulation_speeds =
+          make_array(0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f,
+                     3.0f, 3.5f, 4.0f, 4.5f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f);
+        static constexpr auto get_emulation_speed_options = [](float current_speed) {
+          ImGuiFullscreen::ChoiceDialogOptions options;
+          options.reserve(emulation_speeds.size());
+          for (const float speed : emulation_speeds)
+          {
+            options.emplace_back(
+              (speed != 0.0f) ?
+                StringUtil::StdStringFromFormat("%d%% [%d FPS (NTSC) / %d FPS (PAL)]", static_cast<int>(speed * 100.0f),
+                                                static_cast<int>(60.0f * speed), static_cast<int>(50.0f * speed)) :
+                "Unlimited",
+              speed == current_speed);
+          }
+          return options;
+        };
+
+        static constexpr auto cdrom_read_speeds =
+          make_array("None (Double Speed)", "2x (Quad Speed)", "3x (6x Speed)", "4x (8x Speed)", "5x (10x Speed)",
+                     "6x (12x Speed)", "7x (14x Speed)", "8x (16x Speed)", "9x (18x Speed)", "10x (20x Speed)");
+
+        BeginMenuButtons(1, false);
+
+        settings_changed |=
+          EnumChoiceButton("Console Region", "Determines the emulated hardware type.", &s_settings_copy.region,
+                           &Settings::GetConsoleRegionDisplayName, ConsoleRegion::Count);
+
+#define MAKE_EMULATION_SPEED(setting_title, setting_var)                                                               \
+  if (MenuButtonWithValue(                                                                                             \
+        setting_title,                                                                                                 \
+        "Sets the target emulation speed. It is not guaranteed that this speed will be reached on all systems.",       \
+        (setting_var != 0.0f) ? TinyString::FromFormat("%.0f%%", setting_var * 100.0f) : TinyString("Unlimited")))     \
+  {                                                                                                                    \
+    OpenChoiceDialog(setting_title, false, get_emulation_speed_options(setting_var),                                   \
+                     [](s32 index, const std::string& title, bool checked) {                                           \
+                       if (index >= 0)                                                                                 \
+                       {                                                                                               \
+                         setting_var = emulation_speeds[index];                                                        \
+                         s_host_interface->RunLater(SaveAndApplySettings);                                             \
+                       }                                                                                               \
+                       CloseChoiceDialog();                                                                            \
+                     });                                                                                               \
+  }
+
+        MAKE_EMULATION_SPEED("Emulation Speed", s_settings_copy.emulation_speed);
+        MAKE_EMULATION_SPEED("Fast Forward Speed", s_settings_copy.fast_forward_speed);
+        MAKE_EMULATION_SPEED("Turbo Speed", s_settings_copy.turbo_speed);
+
+#undef MAKE_EMULATION_SPEED
+
+        settings_changed |= ToggleButton("Sync To Host Refresh Rate",
+                                         "Adjusts the emulation speed so the console's refresh rate matches the host "
+                                         "when VSync and Audio Resampling are enabled.",
+                                         &s_settings_copy.sync_to_host_refresh_rate,
+                                         s_settings_copy.video_sync_enabled && s_settings_copy.audio_resampling);
+
+        settings_changed |= EnumChoiceButton(
+          "CPU Execution Mode", "Determines how the emulated CPU executes instructions. Recompiler is recommended.",
+          &s_settings_copy.cpu_execution_mode, &Settings::GetCPUExecutionModeDisplayName, CPUExecutionMode::Count);
+
+        settings_changed |=
+          ToggleButton("Enable Overclocking", "When this option is chosen, the clock speed set below will be used.",
+                       &s_settings_copy.cpu_overclock_enable);
+
+        s32 overclock_percent =
+          s_settings_copy.cpu_overclock_enable ? static_cast<s32>(s_settings_copy.GetCPUOverclockPercent()) : 100;
+        if (RangeButton("Overclocking Percentage",
+                        "Selects the percentage of the normal clock speed the emulated hardware will run at.",
+                        &overclock_percent, 10, 1000, 10, "%d%%", s_settings_copy.cpu_overclock_enable))
+        {
+          s_settings_copy.SetCPUOverclockPercent(static_cast<u32>(overclock_percent));
+          settings_changed = true;
+        }
+
+        const u32 read_speed_index =
+          std::min(g_settings.cdrom_read_speedup, static_cast<u32>(cdrom_read_speeds.size() + 1)) - 1;
+        if (MenuButtonWithValue("CD-ROM Read Speedup",
+                                "Speeds up CD-ROM reads by the specified factor. May improve loading speeds in some "
+                                "games, and break others.",
+                                cdrom_read_speeds[read_speed_index]))
+        {
+          ImGuiFullscreen::ChoiceDialogOptions options;
+          options.reserve(cdrom_read_speeds.size());
+          for (u32 i = 0; i < static_cast<u32>(cdrom_read_speeds.size()); i++)
+            options.emplace_back(cdrom_read_speeds[i], i == read_speed_index);
+          OpenChoiceDialog("CD-ROM Read Speedup", false, std::move(options),
+                           [](s32 index, const std::string& title, bool checked) {
+                             if (index >= 0)
+                               s_settings_copy.cdrom_read_speedup = static_cast<u32>(index) + 1;
+                             CloseChoiceDialog();
+                           });
+        }
+
+        settings_changed |= ToggleButton(
+          "Enable CD-ROM Read Thread",
+          "Reduces hitches in emulation by reading/decompressing CD data asynchronously on a worker thread.",
+          &s_settings_copy.cdrom_read_thread);
+        settings_changed |= ToggleButton("Enable CD-ROM Region Check",
+                                         "Simulates the region check present in original, unmodified consoles.",
+                                         &s_settings_copy.cdrom_region_check);
+        settings_changed |= ToggleButton(
+          "Preload CD Images to RAM",
+          "Loads the game image into RAM. Useful for network paths that may become unreliable during gameplay.",
+          &s_settings_copy.cdrom_load_image_to_ram);
+
+        EndMenuButtons();
+      }
+      break;
+
+      case SettingsPage::BIOSSettings:
+      {
+        static constexpr auto config_keys = make_array("", "PathNTSCJ", "PathNTSCU", "PathPAL");
+        static std::string bios_region_filenames[static_cast<u32>(ConsoleRegion::Count)];
+        static std::string bios_directory;
+        static bool bios_filenames_loaded = false;
+
+        if (!bios_filenames_loaded)
+        {
+          for (u32 i = 0; i < static_cast<u32>(ConsoleRegion::Count); i++)
+          {
+            if (i == static_cast<u32>(ConsoleRegion::Auto))
+              continue;
+            bios_region_filenames[i] = s_settings_interface->GetStringValue("BIOS", config_keys[i]);
+          }
+          bios_directory = s_host_interface->GetBIOSDirectory();
+          bios_filenames_loaded = true;
+        }
+
+        BeginMenuButtons(1, false);
+
+        for (u32 i = 0; i < static_cast<u32>(ConsoleRegion::Count); i++)
+        {
+          const ConsoleRegion region = static_cast<ConsoleRegion>(i);
+          if (region == ConsoleRegion::Auto)
+            continue;
+
+          TinyString title;
+          title.Format("BIOS for %s", Settings::GetConsoleRegionName(region));
+
+          if (MenuButtonWithValue(title,
+                                  SmallString::FromFormat("BIOS to use when emulating %s consoles.",
+                                                          Settings::GetConsoleRegionDisplayName(region)),
+                                  bios_region_filenames[i].c_str()))
+          {
+            ImGuiFullscreen::ChoiceDialogOptions options;
+            auto images = s_host_interface->FindBIOSImagesInDirectory(s_host_interface->GetBIOSDirectory().c_str());
+            options.reserve(images.size() + 1);
+            options.emplace_back("Auto-Detect", bios_region_filenames[i].empty());
+            for (auto& [path, info] : images)
+            {
+              const bool selected = bios_region_filenames[i] == path;
+              options.emplace_back(std::move(path), selected);
+            }
+
+            OpenChoiceDialog(title, false, std::move(options), [i](s32 index, const std::string& path, bool checked) {
+              if (index >= 0)
+              {
+                bios_region_filenames[i] = path;
+                s_settings_interface->SetStringValue("BIOS", config_keys[i], path.c_str());
+                s_settings_interface->Save();
+              }
+              CloseChoiceDialog();
+            });
+          }
+        }
+
+        if (MenuButton("BIOS Directory", bios_directory.c_str()))
+        {
+          OpenFileSelector("BIOS Directory", true, [](const std::string& path) {
+            if (!path.empty())
+            {
+              bios_directory = path;
+              s_settings_interface->SetStringValue("BIOS", "SearchDirectory", path.c_str());
+              s_settings_interface->Save();
+            }
+            CloseFileSelector();
+          });
+        }
+
+        MenuHeading("Patches");
+
+        settings_changed |=
+          ToggleButton("Enable Fast Boot", "Patches the BIOS to skip the boot animation. Safe to enable.",
+                       &s_settings_copy.bios_patch_fast_boot);
+        settings_changed |= ToggleButton(
+          "Enable TTY Output", "Patches the BIOS to log calls to printf(). Only use when debugging, can break games.",
+          &s_settings_copy.bios_patch_tty_enable);
+
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::ControllerSettings:
-        break;
+      {
+        BeginMenuButtons(1, false);
+        ActiveButton("Not yet implemented, please check back later.  " ICON_FA_SMILE, false, false);
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::HotkeySettings:
-        break;
+      {
+        BeginMenuButtons(1, false);
+        ActiveButton("Not yet implemented, please check back later.  " ICON_FA_SMILE, false, false);
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::MemoryCardSettings:
-        break;
+      {
+        BeginMenuButtons(6, false);
+
+        for (u32 i = 0; i < 2; i++)
+        {
+          settings_changed |= EnumChoiceButton(
+            TinyString::FromFormat("Memory Card %u Type", i + 1),
+            SmallString::FromFormat("Sets which sort of memory card image will be used for slot %u.", i + 1),
+            &s_settings_copy.memory_card_types[i], &Settings::GetMemoryCardTypeDisplayName, MemoryCardType::Count);
+
+          settings_changed |= MenuButton(TinyString::FromFormat("Shared Memory Card %u Path", i + 1),
+                                         s_settings_copy.memory_card_paths[i].c_str(),
+                                         s_settings_copy.memory_card_types[i] == MemoryCardType::Shared);
+        }
+
+        settings_changed |= ToggleButton(
+          "Use Single Card For Playlist",
+          "When using a playlist (m3u) and per-game (title) memory cards, use a single memory card for all discs.",
+          &s_settings_copy.memory_card_use_playlist_title);
+
+        static std::string memory_card_directory;
+        if (memory_card_directory.empty())
+          memory_card_directory = s_host_interface->GetUserDirectoryRelativePath("memcards");
+
+        MenuButton("Per-Game Memory Card Directory", memory_card_directory.c_str(), false);
+
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::DisplaySettings:
       {
@@ -610,6 +854,11 @@ void DrawSettingsWindow()
         settings_changed |=
           EnumChoiceButton("GPU Renderer", "Chooses the backend to use for rendering the console/game visuals.",
                            &s_settings_copy.gpu_renderer, &Settings::GetRendererDisplayName, GPURenderer::Count);
+
+        settings_changed |=
+          ToggleButton("Enable VSync",
+                       "Synchronizes presentation of the console's frames to the host. Enable for smoother animations.",
+                       &s_settings_copy.video_sync_enabled);
 
         switch (s_settings_copy.gpu_renderer)
         {
@@ -770,7 +1019,40 @@ void DrawSettingsWindow()
       break;
 
       case SettingsPage::AudioSettings:
-        break;
+      {
+        BeginMenuButtons(1, false);
+
+        settings_changed |= RangeButton("Output Volume", "Controls the volume of the audio played on the host.",
+                                        &s_settings_copy.audio_output_volume, 0, 100, 1, "%d%%");
+        settings_changed |= RangeButton("Fast Forward Volume",
+                                        "Controls the volume of the audio played on the host when fast forwarding.",
+                                        &s_settings_copy.audio_output_volume, 0, 100, 1, "%d%%");
+        settings_changed |= ToggleButton("Mute All Sound", "Prevents the emulator from producing any audible sound.",
+                                         &s_settings_copy.audio_output_muted);
+        settings_changed |= ToggleButton("Mute CD Audio",
+                                         "Forcibly mutes both CD-DA and XA audio from the CD-ROM. Can be used to "
+                                         "disable background music in some games.",
+                                         &s_settings_copy.cdrom_mute_cd_audio);
+
+        settings_changed |= ToggleButton("Sync To Output",
+                                         "Throttles the emulation speed based on the audio backend pulling audio "
+                                         "frames. Enable to reduce the chances of crackling.",
+                                         &s_settings_copy.audio_sync_enabled);
+        settings_changed |= ToggleButton(
+          "Resampling",
+          "When running outside of 100% speed, resamples audio from the target speed instead of dropping frames.",
+          &s_settings_copy.audio_resampling);
+        settings_changed |= EnumChoiceButton(
+          "Audio Backend",
+          "The audio backend determines how frames produced by the emulator are submitted to the host.",
+          &s_settings_copy.audio_backend, &Settings::GetAudioBackendDisplayName, AudioBackend::Count);
+        settings_changed |= RangeButton(
+          "Buffer Size", "The buffer size determines the size of the chunks of audio which will be pulled by the host.",
+          reinterpret_cast<s32*>(&s_settings_copy.audio_buffer_size), 1024, 8192, 128, "%d Frames");
+
+        EndMenuButtons();
+      }
+      break;
 
       case SettingsPage::AdvancedSettings:
       {
@@ -782,6 +1064,53 @@ void DrawSettingsWindow()
         {
           s_host_interface->RunLater([debug_menu]() { SetDebugMenuEnabled(debug_menu, true); });
         }
+
+        settings_changed |=
+          ToggleButton("Disable All Enhancements", "Temporarily disables all enhancements, useful when testing.",
+                       &s_settings_copy.disable_all_enhancements);
+#if 0
+        settings_changed |= RangeButton("Display FPS Limit", "Limits how many frames are displayed to the screen. These frames are still rendered.", &s_settings_copy.display_max_fps);
+#endif
+        settings_changed |=
+          ToggleButton("Enable PGXP CPU Mode", "Uses PGXP for all instructions, not just memory operations.",
+                       &s_settings_copy.gpu_pgxp_cpu);
+        settings_changed |= ToggleButton(
+          "Enable PGXP Vertex Cache", "Uses screen positions to resolve PGXP data. May improve visuals in some games.",
+          &s_settings_copy.gpu_pgxp_vertex_cache);
+        settings_changed |=
+          ToggleButton("Enable PGXP Preserve Projection Precision",
+                       "Adds additional precision to PGXP data post-projection. May improve visuals in some games.",
+                       &s_settings_copy.gpu_pgxp_preserve_proj_fp);
+#if 0
+        settings_changed |= ToggleButton("PGXP Geometry Tolerance", "", &s_settings_copy.gpu_pgxp_tolerance);
+        settings_changed |= ToggleButton("PGXP Depth Clear Threshold", "", &s_settings_copy.gpu_pgxp_tolerance);
+#endif
+
+        settings_changed |= ToggleButton("Enable VRAM Write Texture Replacement",
+                                         "Enables the replacement of background textures in supported games.",
+                                         &s_settings_copy.texture_replacements.enable_vram_write_replacements);
+        settings_changed |= ToggleButton("Preload Replacement Textures",
+                                         "Loads all replacement texture to RAM, reducing stuttering at runtime.",
+                                         &s_settings_copy.texture_replacements.preload_textures,
+                                         s_settings_copy.texture_replacements.AnyReplacementsEnabled());
+        settings_changed |=
+          ToggleButton("Dump Replacable VRAM Writes", "Writes textures which can be replaced to the dump directory.",
+                       &s_settings_copy.texture_replacements.dump_vram_writes);
+        settings_changed |=
+          ToggleButton("Set VRAM Write Dump Alpha Channel", "Clears the mask/transparency bit in VRAM write dumps.",
+                       &s_settings_copy.texture_replacements.dump_vram_write_force_alpha_channel);
+
+        settings_changed |=
+          ToggleButton("Enable Recompiler ICache",
+                       "Simulates the CPU's instruction cache in the recompiler. Can help with games running too fast.",
+                       &s_settings_copy.cpu_recompiler_icache);
+        settings_changed |= ToggleButton("Enable Recompiler Memory Exceptions",
+                                         "Enables alignment and bus exceptions. Not needed for any known games.",
+                                         &s_settings_copy.cpu_recompiler_memory_exceptions);
+        settings_changed |= EnumChoiceButton("Recompiler Fast Memory Access",
+                                             "Avoids calls to C++ code, significantly speeding up the recompiler.",
+                                             &s_settings_copy.cpu_fastmem_mode, &Settings::GetCPUFastmemModeDisplayName,
+                                             CPUFastmemMode::Count, !s_settings_copy.cpu_recompiler_memory_exceptions);
 
         EndMenuButtons();
       }
@@ -817,7 +1146,7 @@ void DrawQuickMenu()
     ImGui::TextUnformatted(System::GetRunningPath().c_str());
     ImGui::PopFont();
 
-    ImGui::SetCursorPosY(LayoutScale(90.0f));
+    ImGui::SetCursorPosY(LayoutScale(80.0f));
 
     BeginMenuButtons(9, false);
 
@@ -1138,27 +1467,31 @@ void DrawGameListWindow()
   EndFullscreenColumns();
 }
 
-void LoadGameList()
+void EnsureGameListLoaded()
 {
-  if (s_game_list_loaded)
-    return;
+  // not worth using a condvar here
+  if (s_game_list_load_thread.joinable())
+    s_game_list_load_thread.join();
+}
 
-  s_game_list_loaded = true;
-
-  HostInterfaceProgressCallback cb;
-  s_host_interface->GetGameList()->SetSearchDirectoriesFromSettings(*s_settings_interface);
+static void GameListRefreshThread()
+{
+  ProgressCallback cb("game_list_refresh");
   s_host_interface->GetGameList()->Refresh(false, false, &cb);
 }
 
-void RefreshGameList()
+void QueueGameListRefresh()
 {
-  s_game_list_loaded = false;
-  LoadGameList();
+  if (s_game_list_load_thread.joinable())
+    s_game_list_load_thread.join();
+
+  s_host_interface->GetGameList()->SetSearchDirectoriesFromSettings(*s_settings_interface);
+  s_game_list_load_thread = std::thread(GameListRefreshThread);
 }
 
 void SwitchToGameList()
 {
-  LoadGameList();
+  EnsureGameListLoaded();
   s_current_main_window = MainWindowType::GameList;
 }
 
@@ -1196,8 +1529,7 @@ HostDisplayTexture* GetGameListCover(const GameListEntry* entry)
 
 HostDisplayTexture* GetCoverForCurrentGame()
 {
-  if (!s_game_list_loaded)
-    s_host_interface->RunLater(LoadGameList);
+  EnsureGameListLoaded();
 
   const GameListEntry* entry = s_host_interface->GetGameList()->GetEntryForPath(System::GetRunningPath().c_str());
   if (!entry)

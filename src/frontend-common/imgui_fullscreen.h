@@ -149,18 +149,22 @@ void EndFullscreenWindow();
 void BeginMenuButtons(u32 num_items, bool center, float x_padding = LAYOUT_MENU_BUTTON_X_PADDING,
                       float y_padding = LAYOUT_MENU_BUTTON_Y_PADDING);
 void EndMenuButtons();
+void MenuHeading(const char* title, bool draw_line = true);
 bool ActiveButton(const char* title, bool is_active, bool enabled = true,
                   float height = LAYOUT_MENU_BUTTON_HEIGHT_NO_SUMMARY, ImFont* font = g_large_font);
 bool MenuButton(const char* title, const char* summary, bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT,
                 ImFont* font = g_large_font, ImFont* summary_font = g_medium_font);
+bool MenuButtonWithValue(const char* title, const char* summary, const char* value, bool enabled = true,
+                         float height = LAYOUT_MENU_BUTTON_HEIGHT, ImFont* font = g_large_font,
+                         ImFont* summary_font = g_medium_font);
 bool MenuImageButton(const char* title, const char* summary, ImTextureID user_texture_id, const ImVec2& image_size,
                      const ImVec2& uv0 = ImVec2(0.0f, 0.0f), const ImVec2& uv1 = ImVec2(1.0f, 1.0f));
 bool ToggleButton(const char* title, const char* summary, bool* v, bool enabled = true,
                   float height = LAYOUT_MENU_BUTTON_HEIGHT, ImFont* font = g_large_font,
                   ImFont* summary_font = g_medium_font);
-bool SpinButton(const char* title, const char* summary, const char* suffix, s32* value, s32 min, s32 max, s32 increment,
-                bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT, ImFont* font = g_large_font,
-                ImFont* summary_font = g_medium_font);
+bool RangeButton(const char* title, const char* summary, s32* value, s32 min, s32 max, s32 increment,
+                 const char* format = "%d", bool enabled = true, float height = LAYOUT_MENU_BUTTON_HEIGHT,
+                 ImFont* font = g_large_font, ImFont* summary_font = g_medium_font);
 bool EnumChoiceButtonImpl(const char* title, const char* summary, s32* value_pointer,
                           const char* (*to_display_name_function)(s32 value, void* opaque), void* opaque, u32 count,
                           bool enabled, float height, ImFont* font, ImFont* summary_font);
@@ -198,5 +202,9 @@ using ChoiceDialogCallback = std::function<void(s32 index, const std::string& ti
 using ChoiceDialogOptions = std::vector<std::pair<std::string, bool>>;
 void OpenChoiceDialog(const char* title, bool checkable, ChoiceDialogOptions options, ChoiceDialogCallback callback);
 void CloseChoiceDialog();
+
+void OpenBackgroundProgressDialog(const char* str_id, std::string message, s32 min, s32 max, s32 value);
+void UpdateBackgroundProgressDialog(const char* str_id, std::string message, s32 min, s32 max, s32 value);
+void CloseBackgroundProgressDialog(const char* str_id);
 
 } // namespace ImGuiFullscreen

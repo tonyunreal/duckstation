@@ -51,7 +51,7 @@ ALWAYS_INLINE static TinyString GetWindowTitle()
 bool SDLHostInterface::CreateSDLWindow()
 {
   static constexpr u32 DEFAULT_WINDOW_WIDTH = 1280;
-  static constexpr u32 DEFAULT_WINDOW_HEIGHT = 720 + 20;
+  static constexpr u32 DEFAULT_WINDOW_HEIGHT = 720;
   // static constexpr u32 DEFAULT_WINDOW_WIDTH = 900;
   // static constexpr u32 DEFAULT_WINDOW_HEIGHT = 700;
 
@@ -186,7 +186,6 @@ bool SDLHostInterface::CreateDisplay()
     return false;
   }
 
-  m_display->SetDisplayTopMargin(m_fullscreen ? 0 : static_cast<int>(20.0f * ImGui::GetIO().DisplayFramebufferScale.x));
   return true;
 }
 
