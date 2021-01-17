@@ -123,6 +123,8 @@ static ALWAYS_INLINE ImVec4 UISecondaryTextColor()
 }
 
 void SetFont(const char* filename, float size_pixels, const ImWchar* glyph_ranges);
+
+/// Changes the menu bar size. Don't forget to call UpdateLayoutScale() and UpdateFonts().
 void SetMenuBarSize(float size);
 
 /// Rebuilds fonts to a new scale if needed. Returns true if fonts have changed and the texture needs updating.

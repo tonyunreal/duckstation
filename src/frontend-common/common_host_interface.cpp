@@ -20,6 +20,7 @@
 #include "core/texture_replacements.h"
 #include "core/timers.h"
 #include "cubeb_audio_stream.h"
+#include "fullscreen_ui.h"
 #include "game_list.h"
 #include "icon.h"
 #include "imgui.h"
@@ -2761,6 +2762,12 @@ std::unique_ptr<ByteStream> CommonHostInterface::OpenPackageFile(const char* pat
   const u32 real_flags = (flags & allowed_flags) | BYTESTREAM_OPEN_READ;
   Log_DevPrintf("Requesting package file '%s'", path);
   return FileSystem::OpenFile(full_path.c_str(), real_flags);
+}
+
+bool CommonHostInterface::SetControllerNavigationButtonState(FrontendCommon::ControllerNavigationButton button,
+                                                             bool pressed)
+{
+  return FullscreenUI::SetControllerNavInput(button, pressed);
 }
 
 #ifdef WITH_DISCORD_PRESENCE

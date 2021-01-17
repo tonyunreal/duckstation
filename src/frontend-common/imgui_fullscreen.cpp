@@ -56,8 +56,6 @@ void SetMenuBarSize(float size)
     return;
 
   s_menu_bar_size = size;
-  UpdateLayoutScale();
-  UpdateFonts();
 }
 
 static void AddIconFonts(float size)
@@ -871,7 +869,7 @@ void DrawFileSelector()
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                       LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING, LAYOUT_MENU_BUTTON_Y_PADDING));
 
-  bool is_open = true;
+  bool is_open = (ImGui::GetNavInputAmount(ImGuiNavInput_Cancel, ImGuiInputReadMode_Pressed) < 1.0f);
   bool directory_selected = false;
   if (ImGui::BeginPopupModal(s_file_selector_title.c_str(), &is_open,
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
@@ -981,7 +979,7 @@ void DrawChoiceDialog()
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                       LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING, LAYOUT_MENU_BUTTON_Y_PADDING));
 
-  bool is_open = true;
+  bool is_open = (ImGui::GetNavInputAmount(ImGuiNavInput_Cancel, ImGuiInputReadMode_Pressed) < 1.0f);
   s32 choice = -1;
   bool choice_checked = false;
 

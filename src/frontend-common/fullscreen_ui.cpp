@@ -26,6 +26,7 @@
 #include "imgui_stdlib.h"
 #include "imgui_styles.h"
 #include "scmversion/scmversion.h"
+#include <bitset>
 #include <thread>
 Log_SetChannel(FullscreenUI);
 
@@ -79,6 +80,7 @@ static MainWindowType s_current_main_window = MainWindowType::Landing;
 static SettingsPage s_settings_page = SettingsPage::InterfaceSettings;
 static Settings s_settings_copy;
 static bool s_debug_menu_enabled;
+static std::bitset<static_cast<u32>(FrontendCommon::ControllerNavigationButton::Count)> s_nav_input_values{};
 
 //////////////////////////////////////////////////////////////////////////
 // Resources
@@ -144,6 +146,11 @@ bool Initialize(CommonHostInterface* host_interface, SettingsInterface* settings
   return true;
 }
 
+bool HasActiveWindow()
+{
+  return s_current_main_window != MainWindowType::None;
+}
+
 void SystemCreated()
 {
   s_current_main_window = MainWindowType::None;
@@ -183,6 +190,7 @@ void Shutdown()
 
   s_save_state_selector_slots.clear();
   s_cover_image_map.clear();
+  s_nav_input_values = {};
   DestroyResources();
 
   s_settings_interface = nullptr;
@@ -433,15 +441,6 @@ void DrawLandingWindow()
       s_host_interface->RequestExit();
 
     EndMenuButtons();
-
-    SmallString version_string;
-    version_string.Format("%s (%s)", g_scm_tag_str, g_scm_branch_str);
-
-    const ImVec2 text_size = ImGui::CalcTextSize(version_string) + LayoutScale(10.0f, 10.0f);
-    ImGui::SetCursorPos(ImGui::GetWindowSize() - text_size);
-    ImGui::PushFont(g_medium_font);
-    ImGui::TextUnformatted(version_string);
-    ImGui::PopFont();
   }
 
   EndFullscreenColumnWindow();
@@ -1327,7 +1326,7 @@ void DrawGameListWindow()
     return;
   }
 
-  if (BeginFullscreenColumnWindow(450.0f, 1220.0f, "game_list_entries"))
+  if (BeginFullscreenColumnWindow(450.0f, LAYOUT_SCREEN_WIDTH, "game_list_entries"))
   {
     BeginMenuButtons(s_host_interface->GetGameList()->GetEntryCount(), false);
 
@@ -1434,36 +1433,6 @@ void DrawGameListWindow()
   }
   EndFullscreenColumnWindow();
 
-  if (BeginFullscreenColumnWindow(1220.0f, LAYOUT_SCREEN_WIDTH, "game_list_quick_select"))
-  {
-    const float height = 24.0f;
-    BeginMenuButtons(29, false, 0.0f, 0.0f);
-
-    ImGui::SetCursorPos(LayoutScale(ImVec2(17.0f, 4.0f)));
-    ImGui::PushFont(g_large_font);
-    ImGui::TextUnformatted(ICON_KI_BUTTON_LB);
-    ImGui::PopFont();
-
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiFullscreen::UIPrimaryDisabledTextColor());
-    ActiveButton("0", false, false, height, g_medium_font);
-    ImGui::PopStyleColor();
-
-    for (char letter = 'A'; letter <= 'Z'; letter++)
-    {
-      TinyString str;
-      str.Format("%c", letter);
-      ActiveButton(str, false, true, height, g_medium_font);
-    }
-
-    ImGui::SetCursorPosX(LayoutScale(17.0f));
-    ImGui::PushFont(g_large_font);
-    ImGui::TextUnformatted(ICON_KI_BUTTON_RB);
-    ImGui::PopFont();
-
-    EndMenuButtons();
-  }
-  EndFullscreenColumnWindow();
-
   EndFullscreenColumns();
 }
 
@@ -1550,6 +1519,9 @@ void SetDebugMenuEnabled(bool enabled, bool save_to_ini)
   const float size = enabled ? DPIScale(LAYOUT_MAIN_MENU_BAR_SIZE) : 0.0f;
   s_host_interface->GetDisplay()->SetDisplayTopMargin(static_cast<s32>(size));
   ImGuiFullscreen::SetMenuBarSize(size);
+  ImGuiFullscreen::UpdateLayoutScale();
+  if (ImGuiFullscreen::UpdateFonts())
+    s_host_interface->GetDisplay()->UpdateImGuiFontTexture();
   s_debug_menu_enabled = enabled;
 
   if (save_to_ini)
@@ -2106,6 +2078,48 @@ void DrawDebugDebugMenu()
     debug_settings_copy.show_dma_state = debug_settings.show_dma_state;
     s_host_interface->RunLater(SaveAndApplySettings);
   }
+}
+
+bool SetControllerNavInput(FrontendCommon::ControllerNavigationButton button, bool value)
+{
+  s_nav_input_values[static_cast<u32>(button)] = value;
+  if (!HasActiveWindow())
+    return false;
+
+  // This is a bit hacky..
+  ImGuiIO& io = ImGui::GetIO();
+
+#define MAP_KEY(nbutton, imkey)                                                                                        \
+  if (button == nbutton)                                                                                               \
+  {                                                                                                                    \
+    io.KeysDown[io.KeyMap[imkey]] = value;                                                                             \
+  }
+
+  MAP_KEY(FrontendCommon::ControllerNavigationButton::LeftShoulder, ImGuiKey_PageUp);
+  MAP_KEY(FrontendCommon::ControllerNavigationButton::RightShoulder, ImGuiKey_PageDown);
+
+#undef MAP_KEY
+
+  return true;
+}
+
+void SetImGuiNavInputs()
+{
+  if (!HasActiveWindow())
+    return;
+
+  ImGuiIO& io = ImGui::GetIO();
+
+#define MAP_BUTTON(button, imbutton) io.NavInputs[imbutton] = s_nav_input_values[static_cast<u32>(button)] ? 1.0f : 0.0f
+
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::Activate, ImGuiNavInput_Activate);
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::Cancel, ImGuiNavInput_Cancel);
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::DPadLeft, ImGuiNavInput_DpadLeft);
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::DPadRight, ImGuiNavInput_DpadRight);
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::DPadUp, ImGuiNavInput_DpadUp);
+  MAP_BUTTON(FrontendCommon::ControllerNavigationButton::DPadDown, ImGuiNavInput_DpadDown);
+
+#undef MAP_BUTTON
 }
 
 } // namespace FullscreenUI

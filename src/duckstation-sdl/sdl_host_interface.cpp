@@ -203,7 +203,7 @@ void SDLHostInterface::CreateImGuiContext()
 
   ImGui::CreateContext();
   ImGui::GetIO().IniFilename = nullptr;
-  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
   ImGui::GetIO().DisplayFramebufferScale.x = framebuffer_scale;
   ImGui::GetIO().DisplayFramebufferScale.y = framebuffer_scale;
   ImGui::GetStyle().ScaleAllSizes(framebuffer_scale);
@@ -624,8 +624,8 @@ void SDLHostInterface::HandleSDLEvent(const SDL_Event* event)
 
 void SDLHostInterface::PollAndUpdate()
 {
-  CommonHostInterface::PollAndUpdate();
   ProcessEvents();
+  CommonHostInterface::PollAndUpdate();
 }
 
 void SDLHostInterface::ProcessEvents()
@@ -668,6 +668,7 @@ void SDLHostInterface::Run()
 
     // rendering
     {
+      FullscreenUI::SetImGuiNavInputs();
       ImGui::NewFrame();
       DrawImGuiWindows();
       ImGui::EndFrame();
