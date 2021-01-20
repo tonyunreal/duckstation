@@ -196,17 +196,97 @@ Requirements (Debian/Ubuntu package names):
 ### macOS
 **NOTE:** macOS is highly experimental and not tested by the developer. Use at your own risk, things may be horribly broken.
 
-Requirements:
- - CMake (installed by default? otherwise, `brew install cmake`)
- - SDL2 (`brew install sdl2`)
- - Qt 5 (`brew install qt5`)
+**The following guide assumes you are cloning the non-official fork at `https://github.com/tonyunreal/duckstation/tree/tonyunreal-m1`, and you are building on a Apple Silicon Mac. This fork is not supported in anyway, either by me (tonyunreal) or the developers of DuckStation. Building on intel is also possible, just ignore all the steps for installing arm64 libaries and follow the steps on building an intel binary.**
 
-1. Clone the repository. Submodules aren't necessary, there is only one and it is only used for Windows (`git clone https://github.com/stenzek/duckstation.git -b dev`).
-2. Clone the mac externals repository (for MoltenVK): `git clone https://github.com/stenzek/duckstation-ext-mac.git dep/mac`.
-2. Create a build directory, either in-tree or elsewhere, e.g. `mkdir build-release`, `cd build-release`.
-3. Run cmake to configure the build system: `cmake -DCMAKE_BUILD_TYPE=Release -DQt5_DIR=/usr/local/opt/qt/lib/cmake/Qt5 ..`. You may need to tweak `Qt5_DIR` depending on your system.
-4. Compile the source code: `make`. Use `make -jN` where `N` is the number of CPU cores in your system for a faster build.
-5. Run the binary, located in the build directory under `bin/duckstation-sdl`, or `bin/DuckStation.app` for Qt.
+Preliminary Steps:
+
+1. Get the latest version of Xcode (either from the Mac App Store or from Apple's developer website), run it once and install the Command Line Tools as prompted.
+
+  If you happen to have the macOS version of the Command Line Tools installed before this, Cmake might complain about missing tools during complication. If this happens, do this:
+
+    `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+
+2. Make sure you have both the arm64 and the x64 versions of Homebrew installed. If you don't know how to do this, see [this article](https://soffes.blog/homebrew-on-apple-silicon). The following steps assumes that you have the arm64 version installed in `/opt/homebrew` and the x64 version in `/usr/local`.
+
+  Get both versions of qt5 and cmake installed:
+    
+    `brew install cmake qt`
+
+    `ibrew install cmake qt`
+    
+  Get the HEAD version of SDL2 installed, for better controller support with Apple Silicon:
+    
+  `brew install hg`
+    
+  `brew install --HEAD sdl2`
+
+  `ibrew install hg`
+    
+  `ibrew install --HEAD sdl2`
+
+3. (optional) Get the latest version of MoltenVK, either with Homebrew or build it from the source code on Github.
+  
+Cloning the code:
+
+1. Clone the repository:
+
+  `git clone https://github.com/tonyunreal/duckstation -b tonyunreal-m1`
+  
+2. (optional) Clone the macOS dependency repository, which only has MoltenVK for the moment:
+
+  `git clone https://github.com/stenzek/duckstation-ext-mac.git`
+  
+3. Copy the `libvulkan.dylib` you got (see part 3 of "Preliminary Steps" and part 2 of "Cloning the code") to `duckstation/dep/mac/MoltenVK/`.
+
+Building the code:
+
+For Apple Silicon:
+
+  1. Create a build directory:
+
+  `cd duckstation`
+  
+  `mkdir -p build/arm64`
+  
+  `cd build/arm64`
+  
+  2. Run Cmake to configure the build system:
+  
+  `PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig" Qt5_DIR="/opt/homebrew/opt/qt5" CMAKE_OSX_ARCHITECTURES=arm64 CMAKE_BUILD_TYPE=Release arch -arm64 /opt/homebrew/bin/cmake ../..`
+  
+  3. Compile the code (replace `8` with the number of cores or hyper-threads that your system has):
+  
+  `make -j8`
+  
+  4. Sign the binary locally so it runs on your computer (if you need to distribute the binary to others, you might need to sign it with a proper developer certificate):
+
+  `codesign --deep --force -s "-" bin/DuckStation.app`
+  
+  5. Open Finder, locate to `duckstation/build/arm64/bin/` and double-click `DuckStation.app` to run it, if the app asks for permission for reading certain storage locations, click "OK".
+
+For Rosetta 2 / Intel:
+
+  1. Create a build directory:
+
+  `cd duckstation`
+  
+  `mkdir -p build/x64`
+  
+  `cd build/x64`
+  
+  2. Run Cmake to configure the build system:
+  
+  `PKG_CONFIG_PATH="/usr/local/lib/pkgconfig" Qt5_DIR="/usr/local/opt/qt5" CMAKE_OSX_ARCHITECTURES=x86_64 CMAKE_BUILD_TYPE=Release arch -x86_64 /usr/local/bin/cmake ../..`
+  
+  3. Compile the code (replace `8` with the number of cores or hyper-threads that your system has):
+  
+  `make -j8`
+  
+  4. Sign the binary locally so it runs on your computer (if you need to distribute the binary to others, you might need to sign it with a proper developer certificate):
+
+  `codesign --deep --force -s "-" bin/DuckStation.app`
+  
+  5. Open Finder, locate to `duckstation/build/x64/bin/` and double-click `DuckStation.app` to run it, if the app asks for permission for reading certain storage locations, click "OK".
 
 ### Android
 Requirements:
