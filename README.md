@@ -204,15 +204,15 @@ Preliminary Steps:
 
   If you happen to have the macOS version of the Command Line Tools installed before this, Cmake might complain about missing tools during complication. If this happens, do this:
 
-    `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 
 2. Make sure you have both the arm64 and the x64 versions of Homebrew installed. If you don't know how to do this, see [this article](https://soffes.blog/homebrew-on-apple-silicon). The following steps assumes that you have the arm64 version installed in `/opt/homebrew` and the x64 version in `/usr/local`.
 
   Get both versions of qt5 and cmake installed:
     
-    `brew install cmake qt`
+`brew install cmake qt`
 
-    `ibrew install cmake qt`
+`ibrew install cmake qt`
     
   Get the HEAD version of SDL2 installed, for better controller support with Apple Silicon:
     
