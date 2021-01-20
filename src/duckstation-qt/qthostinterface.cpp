@@ -487,6 +487,12 @@ void QtHostInterface::toggleFullscreen()
   SetFullscreen(!m_is_fullscreen);
 }
 
+void QtHostInterface::saveFullscreen(bool enabled)
+{
+  if (m_is_fullscreen != enabled)
+    m_is_fullscreen = enabled;
+}
+
 bool QtHostInterface::AcquireHostDisplay()
 {
   Assert(!m_display);

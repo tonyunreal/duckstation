@@ -66,12 +66,16 @@ void MainWindow::initializeAndShow()
   connectSignals();
   updateTheme();
 
-  resize(800, 700);
+  resize(1200, 700);
 
   restoreStateFromConfig();
   switchToGameListView();
 
-  show();
+  // if the program is closed while in macOS full screen, calling show here will restore 
+  // the window maximized with a beep sound
+  // and emulation won't start without a crash
+  // use showNormal() instead of show() prevents this issue
+  showNormal();
 }
 
 void MainWindow::reportError(const QString& message)
@@ -100,8 +104,8 @@ bool MainWindow::shouldHideCursorInFullscreen() const
 
 QtDisplayWidget* MainWindow::createDisplay(QThread* worker_thread, bool fullscreen, bool render_to_main)
 {
-  Assert(!m_host_display && !m_display_widget);
-  Assert(!fullscreen || !render_to_main);
+//   Assert(!m_host_display && !m_display_widget);
+//   Assert(!fullscreen || !render_to_main);
 
   m_host_display = m_host_interface->createHostDisplay();
   if (!m_host_display)
@@ -113,16 +117,35 @@ QtDisplayWidget* MainWindow::createDisplay(QThread* worker_thread, bool fullscre
   const std::string fullscreen_mode = m_host_interface->GetStringSettingValue("GPU", "FullscreenMode", "");
   const bool is_exclusive_fullscreen = (fullscreen && !fullscreen_mode.empty() && m_host_display->SupportsFullscreen());
 
-  m_display_widget = new QtDisplayWidget((!fullscreen && render_to_main) ? m_ui.mainContainer : nullptr);
-  m_display_widget->setWindowTitle(windowTitle());
-  m_display_widget->setWindowIcon(windowIcon());
+  m_display_widget = new QtDisplayWidget(render_to_main ? m_ui.mainContainer : nullptr);
+
+  // listen to window state events, in case we need to know whether emulation view is in full screen
+  m_display_widget->installEventFilter(this); 
+  
+  if (!render_to_main)
+  {
+    m_display_widget->setWindowTitle(windowTitle());
+    m_display_widget->setWindowIcon(windowIcon());
+  }
 
   if (fullscreen)
   {
-    if (!is_exclusive_fullscreen)
+//     if (!is_exclusive_fullscreen)
+//       m_display_widget->showFullScreen();
+//     else
+//       m_display_widget->showNormal();
+
+    if (render_to_main)
+    {
+      m_ui.toolBar->setVisible(false);
+      m_ui.statusBar->setVisible(false);
+      this->showFullScreen();
+    }
+    else 
+    {
+      saveDisplayWindowGeometryToConfig();
       m_display_widget->showFullScreen();
-    else
-      m_display_widget->showNormal();
+    }
 
     updateMouseMode(System::IsPaused());
   }
@@ -132,6 +155,11 @@ QtDisplayWidget* MainWindow::createDisplay(QThread* worker_thread, bool fullscre
     m_display_widget->showNormal();
   }
   else
+  {
+    this->showNormal();
+  }
+  
+  if (render_to_main)
   {
     m_ui.mainContainer->insertWidget(1, m_display_widget);
     switchToEmulationView();
@@ -167,26 +195,50 @@ QtDisplayWidget* MainWindow::createDisplay(QThread* worker_thread, bool fullscre
 
 QtDisplayWidget* MainWindow::updateDisplay(QThread* worker_thread, bool fullscreen, bool render_to_main)
 {
-  const bool is_fullscreen = m_display_widget->isFullScreen();
-  const bool is_rendering_to_main = (!is_fullscreen && m_display_widget->parent());
+  const bool is_rendering_to_main = m_display_widget->parent();
+  const bool is_fullscreen = is_rendering_to_main ? this->isFullScreen() : m_display_widget->isFullScreen();
   const std::string fullscreen_mode = m_host_interface->GetStringSettingValue("GPU", "FullscreenMode", "");
   const bool is_exclusive_fullscreen = (fullscreen && !fullscreen_mode.empty() && m_host_display->SupportsFullscreen());
   if (fullscreen == is_fullscreen && is_rendering_to_main == render_to_main)
     return m_display_widget;
 
-  m_host_display->DestroyRenderSurface();
+//   m_host_display->DestroyRenderSurface();
+// 
+//   destroyDisplayWidget();
+//   m_display_widget = new QtDisplayWidget((!fullscreen && render_to_main) ? m_ui.mainContainer : nullptr);
+//   m_display_widget->setWindowTitle(windowTitle());
+//   m_display_widget->setWindowIcon(windowIcon());
 
-  destroyDisplayWidget();
-  m_display_widget = new QtDisplayWidget((!fullscreen && render_to_main) ? m_ui.mainContainer : nullptr);
-  m_display_widget->setWindowTitle(windowTitle());
-  m_display_widget->setWindowIcon(windowIcon());
+  if (render_to_main)
+  {
+    m_display_widget->setParent(m_ui.mainContainer);
+  }
+  else
+  {
+    m_ui.mainContainer->removeWidget(m_display_widget);
+    m_display_widget->setParent(nullptr);
+    switchToGameListView();
+    m_display_widget->setWindowTitle(windowTitle());
+    m_display_widget->setWindowIcon(windowIcon());
+  }
 
   if (fullscreen)
   {
-    if (!is_exclusive_fullscreen)
+//     if (!is_exclusive_fullscreen)
+//       m_display_widget->showFullScreen();
+//     else
+//       m_display_widget->showNormal();
+    if (render_to_main)
+    {
+      m_ui.toolBar->setVisible(false);
+      m_ui.statusBar->setVisible(false);
+      this->showFullScreen();
+    }
+    else 
+    {
+      saveDisplayWindowGeometryToConfig();
       m_display_widget->showFullScreen();
-    else
-      m_display_widget->showNormal();
+    }
 
     updateMouseMode(System::IsPaused());
   }
@@ -196,6 +248,11 @@ QtDisplayWidget* MainWindow::updateDisplay(QThread* worker_thread, bool fullscre
     m_display_widget->showNormal();
   }
   else
+  {
+    this->showNormal();
+  }
+  
+  if (render_to_main)
   {
     m_ui.mainContainer->insertWidget(1, m_display_widget);
     switchToEmulationView();
@@ -212,16 +269,16 @@ QtDisplayWidget* MainWindow::updateDisplay(QThread* worker_thread, bool fullscre
     return nullptr;
   }
 
-  if (!m_host_display->ChangeRenderWindow(wi.value()))
-    Panic("Failed to recreate surface on new widget.");
+//  if (!m_host_display->ChangeRenderWindow(wi.value()))
+//    Panic("Failed to recreate surface on new widget.");
 
   if (is_exclusive_fullscreen)
     setDisplayFullscreen(fullscreen_mode);
 
   m_display_widget->setFocus();
 
-  QSignalBlocker blocker(m_ui.actionFullscreen);
-  m_ui.actionFullscreen->setChecked(fullscreen);
+//   QSignalBlocker blocker(m_ui.actionFullscreen);
+//   m_ui.actionFullscreen->setChecked(fullscreen);
   return m_display_widget;
 }
 
@@ -267,6 +324,15 @@ void MainWindow::destroyDisplay()
   DebugAssert(m_host_display && m_display_widget);
   m_host_display = nullptr;
   destroyDisplayWidget();
+  
+  // restore tool bar and status bar
+  bool is_toolbar_visible = m_host_interface->GetBoolSettingValue("UI", "ShowToolBar", true);
+  m_ui.toolBar->setVisible(is_toolbar_visible);
+  bool is_statusbar_visible = m_host_interface->GetBoolSettingValue("UI", "ShowStatusBar", true);
+  m_ui.statusBar->setVisible(is_statusbar_visible);
+  
+  // restore window mode
+  this->showNormal();
 }
 
 void MainWindow::destroyDisplayWidget()
@@ -929,9 +995,9 @@ void MainWindow::connectSignals()
   connect(m_ui.actionRemoveDisc, &QAction::triggered, this, &MainWindow::onRemoveDiscActionTriggered);
   connect(m_ui.actionAddGameDirectory, &QAction::triggered,
           [this]() { getSettingsDialog()->getGameListSettingsWidget()->addSearchDirectory(this); });
-  connect(m_ui.actionPowerOff, &QAction::triggered, m_host_interface, &QtHostInterface::powerOffSystem);
-  connect(m_ui.actionPowerOffWithoutSaving, &QAction::triggered, m_host_interface,
-          &QtHostInterface::powerOffSystemWithoutSaving);
+  connect(m_ui.actionPowerOff, &QAction::triggered, this, &MainWindow::safePowerOffSystem);
+  connect(m_ui.actionPowerOffWithoutSaving, &QAction::triggered, this,
+          &MainWindow::safePowerOffSystemWithoutSaving);
   connect(m_ui.actionReset, &QAction::triggered, m_host_interface, &QtHostInterface::resetSystem);
   connect(m_ui.actionPause, &QAction::toggled, [this](bool active) { m_host_interface->pauseSystem(active); });
   connect(m_ui.actionScreenshot, &QAction::triggered, m_host_interface, &QtHostInterface::saveScreenshot);
@@ -1212,7 +1278,10 @@ void MainWindow::updateTheme()
 
 void MainWindow::saveStateToConfig()
 {
+  if(!this->isFullScreen())
   {
+    // if we save geometry during full screen the window will restore maximized
+    // so don't do it
     const QByteArray geometry = saveGeometry();
     const QByteArray geometry_b64 = geometry.toBase64();
     const std::string old_geometry_b64 = m_host_interface->GetStringSettingValue("UI", "MainWindowGeometry");
@@ -1220,6 +1289,7 @@ void MainWindow::saveStateToConfig()
       m_host_interface->SetStringSettingValue("UI", "MainWindowGeometry", geometry_b64.constData());
   }
 
+  if(!this->isFullScreen())
   {
     const QByteArray state = saveState();
     const QByteArray state_b64 = state.toBase64();
@@ -1361,7 +1431,52 @@ void MainWindow::changeEvent(QEvent* event)
       m_host_interface->redrawDisplayWindow();
   }
 
+  if(event->type() == QEvent::WindowStateChange)
+  {
+    if (!(static_cast<QWindowStateChangeEvent*>(event)->oldState() & Qt::WindowFullScreen) && (windowState() & Qt::WindowFullScreen))
+    {
+      // entering full screen
+      m_host_interface->saveFullscreen(true);
+      // todo should check render_to_main
+      if (m_host_display)
+      {
+        // emulation running, hide tool bar and status bar
+        m_ui.toolBar->setVisible(false);
+        m_ui.statusBar->setVisible(false);
+      }
+    }
+    else if ((static_cast<QWindowStateChangeEvent*>(event)->oldState() & Qt::WindowFullScreen) && !(windowState() & Qt::WindowFullScreen))
+    {
+      // exiting full screen
+      m_host_interface->saveFullscreen(false);
+      // restore tool bar and status bar
+      bool is_toolbar_visible = m_host_interface->GetBoolSettingValue("UI", "ShowToolBar", true);
+      m_ui.toolBar->setVisible(is_toolbar_visible);
+      bool is_statusbar_visible = m_host_interface->GetBoolSettingValue("UI", "ShowStatusBar", true);
+      m_ui.statusBar->setVisible(is_statusbar_visible);
+    }
+  }
+
   QMainWindow::changeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event)
+{
+  // this listens to window state changes of the child window
+  if(obj == m_display_widget && event->type() == QEvent::WindowStateChange)
+  {
+    if (!(static_cast<QWindowStateChangeEvent*>(event)->oldState() & Qt::WindowFullScreen) && (static_cast<QWidget*>(obj)->windowState() & Qt::WindowFullScreen))
+    {
+      // entering full screen
+      m_host_interface->saveFullscreen(true);
+    }
+    else if ((static_cast<QWindowStateChangeEvent*>(event)->oldState() & Qt::WindowFullScreen) && !(static_cast<QWidget*>(obj)->windowState() & Qt::WindowFullScreen))
+    {
+      // exiting full screen
+      m_host_interface->saveFullscreen(false);
+    }
+  }
+  return QObject::eventFilter(obj, event);
 }
 
 void MainWindow::startupUpdateCheck()
@@ -1501,4 +1616,48 @@ void MainWindow::onUpdateCheckComplete()
 
   m_auto_updater_dialog->deleteLater();
   m_auto_updater_dialog = nullptr;
+}
+
+void MainWindow::safePowerOffSystem()
+{
+  // restore window mode before poweroff
+  // otherwise moltenvk will crash immediately on next game run
+  // 
+  // plz notice that this doesn't fix the random moltenvk crash on the second or third time a game is run.
+  // that regression is moltenvk related but not due to full screen mode. as it happens in pure
+  // window mode too. 
+  // 
+  // the full screen crash this piece of code fixes happens consistently on any second game run,
+  // if the first game is powered off while in full screen mode.
+  this->showNormal();
+  if (m_display_widget && m_display_widget->isFullScreen())
+    m_display_widget->showNormal();
+  
+  if (!m_host_interface)
+    return;
+  
+  // delay a bit since the animation is still running
+  QTimer::singleShot(2000, m_host_interface, &QtHostInterface::powerOffSystem);
+}
+
+void MainWindow::safePowerOffSystemWithoutSaving()
+{
+  // restore window mode before poweroff
+  // otherwise moltenvk will crash immediately on next game run
+  // 
+  // plz notice that this doesn't fix the random moltenvk crash on the second or third time a game is run.
+  // that regression is moltenvk related but not due to full screen mode. as it happens in pure
+  // window mode too. 
+  // 
+  // the full screen crash this piece of code fixes happens consistently on any second game run,
+  // if the first game is powered off while in full screen mode.
+  this->showNormal();
+  if (m_display_widget && m_display_widget->isFullScreen())
+    m_display_widget->showNormal();
+  
+  if (!m_host_interface)
+    return;
+  
+  // delay a bit since the animation is still running
+  QTimer::singleShot(2000, m_host_interface, &QtHostInterface::powerOffSystemWithoutSaving);
 }

@@ -103,10 +103,14 @@ private Q_SLOTS:
 
   void openCPUDebugger();
   void onCPUDebuggerClosed();
+  
+  void safePowerOffSystem();
+  void safePowerOffSystemWithoutSaving();
 
 protected:
   void closeEvent(QCloseEvent* event) override;
   void changeEvent(QEvent* event) override;
+  bool eventFilter(QObject *obj, QEvent *event);
 
 private:
   void setupAdditionalUi();
